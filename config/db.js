@@ -1,9 +1,9 @@
 const { Pool } = require('pg');
 const pool = new Pool({
-    user: 'postgres',
-    host: 'localhost', // Adjust if connecting to a remote server
-    database: 'digilog',
-    password: 'admin',
+    user: 'digilog_db_ravq_user',
+    host: 'dpg-da4ni7on74is73e520cg-a', // Adjust if connecting to a remote server
+    database: 'digilog_db_ravq',
+    password: 'iNlv365NeGQO7nubpHyfNK8zbjV2N7jm',
     port: 5432,  
 });
 pool.query('SET TIMEZONE = \'Asia/Kolkata\';')
