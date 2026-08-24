@@ -177,3 +177,41 @@ exports.getAttendanceLogs = async (req, res) => {
     return res.status(500).json({ statusCode: 500, message: 'Internal Server Error' });
   }
 };
+
+
+// Get all employees
+exports.getEmployees = async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT 
+                e.employee_id,
+                e.employee_name,
+                e.department_id,
+                d.department_name,
+                e.designation,
+                e.mobile_number,
+                e.status,
+                e.device_user_id
+            FROM tbl_employee e
+            LEFT JOIN tbl_department d
+                ON e.department_id = d.department_id
+            ORDER BY e.employee_id DESC
+        `);
+
+        return res.status(200).json({
+            statusCode: 200,
+            message: 'Employee details fetched successfully',
+            count: result.rows.length,
+            data: result.rows
+        });
+
+    } catch (error) {
+        console.error('Get Employees Error:', error);
+
+        return res.status(500).json({
+            statusCode: 500,
+            message: 'Internal server error',
+            error: error.message
+        });
+    }
+};

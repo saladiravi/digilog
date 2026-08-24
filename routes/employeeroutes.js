@@ -9,5 +9,7 @@ router.post('/enroll-finger', employeeController.enrollFingerprintRaw);
 router.post('/confirm-enrollment', employeeController.confirmEnrollment);
 router.post('/sync-attendance', employeeController.syncAttendance);
 router.get('/attendance-logs', employeeController.getAttendanceLogs);
+router.get('/getEmployees',employeeController.getEmployees);
+
 
 module.exports = router;
