@@ -162,3 +162,91 @@ exports.deletedepartment = async (req, res) => {
         });
     }
 };
+
+
+ 
+exports.getDepartmentEmployeeCounts = async (req, res) => {
+  try {
+    const query = `
+      SELECT
+        d.department_id,
+        d.department_name,
+        d.department_head,
+        COUNT(e.employee_id) AS total_employees,
+
+        COUNT(
+          CASE
+            WHEN LOWER(e.status) = 'Active' THEN 1
+          END
+        ) AS active_employees,
+
+        COUNT(
+          CASE
+            WHEN e.enrolled = true THEN 1
+          END
+        ) AS fingerprint_registered
+
+      FROM tbl_department d
+
+      LEFT JOIN tbl_employee e
+        ON e.department_id = d.department_id
+
+      GROUP BY
+        d.department_id,
+        d.department_name
+
+      ORDER BY d.department_id DESC;
+    `;
+
+    const result = await pool.query(query);
+
+    return res.status(200).json({
+      statusCode: 200,
+      message: "Department employee counts fetched successfully",
+      data: result.rows
+    });
+
+  } catch (error) {
+    console.error("Get department employee counts error:", error);
+
+    return res.status(500).json({
+      statusCode: 500,
+      message: "Failed to fetch department employee counts",
+      error: error.message
+    });
+  }
+};
+
+
+exports.getEmployeesByDepartment = async (req, res) => {
+  try {
+    const { department_id } = req.params;
+
+    const query = `
+      SELECT
+        e.*
+      FROM tbl_employee e
+      WHERE e.department_id = $1
+      ORDER BY e.employee_id DESC
+    `;
+
+    const result = await pool.query(query, [department_id]);
+
+    return res.status(200).json({
+      success: true,
+      message: "Employees fetched successfully",
+      department_id: Number(department_id),
+      count: result.rows.length,
+      data: result.rows
+    });
+
+  } catch (error) {
+    console.error("Get employees by department error:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch employees",
+      error: error.message
+    });
+  }
+};

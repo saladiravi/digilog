@@ -9,4 +9,8 @@ routes.get('/getdepartment/:department_id', departmentcontroller.getdepartmentby
 routes.put('/updatedepartment/:department_id', departmentcontroller.updatedepartment);
 routes.delete('/deletedepartment/:department_id', departmentcontroller.deletedepartment);
 
+
+routes.get('/getDepartmentEmployeeCounts',departmentcontroller.getDepartmentEmployeeCounts);
+routes.get('/departments/:department_id',departmentcontroller.getEmployeesByDepartment);
+
 module.exports = routes;

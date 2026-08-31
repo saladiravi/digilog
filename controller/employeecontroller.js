@@ -1,11 +1,19 @@
-const pool = require('../config/db');
-const deviceService = require('../services/deviceService');
- 
-exports.addEmployeeWithDevice = async (req, res) => {
-  const { employee_name, department_id, designation, mobile_number, status, device_ip, device_port } = req.body;
+const pool = require("../config/db");
+const deviceService = require("../services/deviceService");
 
-  if (!employee_name || !device_ip) {
-    return res.status(400).json({ statusCode: 400, message: 'employee_name and device_ip are required' });
+ 
+const resolveDevice = (body) => ({
+  device_ip: body.device_ip || process.env.DEVICE_IP,
+  device_port: body.device_port || process.env.DEVICE_PORT || 4370,
+  device_id: body.device_id || process.env.DEVICE_ID,
+});
+
+exports.addEmployeeWithDevice = async (req, res) => {
+  const { employee_name, department_id, designation, mobile_number, status } = req.body;
+  const { device_ip, device_port } = resolveDevice(req.body);
+
+  if (!employee_name || !device_ip || !department_id) {
+    return res.status(400).json({ statusCode: 400, message: "employee name and department are required" });
   }
 
   let insertedEmployee = null;
@@ -13,36 +21,36 @@ exports.addEmployeeWithDevice = async (req, res) => {
     const empResult = await pool.query(
       `INSERT INTO tbl_employee (employee_name, department_id, designation, mobile_number, status)
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [employee_name, department_id, designation, mobile_number, status || 'active']
+      [employee_name, department_id, designation, mobile_number, status || "Active"]
     );
     insertedEmployee = empResult.rows[0];
     const employeeId = insertedEmployee.employee_id;
 
-    await deviceService.createDeviceUser(device_ip, device_port || 4370, employeeId, String(employeeId), employee_name);
+    await deviceService.createDeviceUser(device_ip, device_port, employeeId, String(employeeId), employee_name);
 
     const updated = await pool.query(
-      'UPDATE tbl_employee SET device_user_id = $1 WHERE employee_id = $2 RETURNING *',
+      "UPDATE tbl_employee SET device_user_id = $1 WHERE employee_id = $2 RETURNING *",
       [String(employeeId), employeeId]
     );
 
-    return res.status(201).json({ statusCode: 201, message: 'Employee added to DB and device', data: updated.rows[0] });
+    return res.status(201).json({ statusCode: 201, message: "Employee added Sucessfully", data: updated.rows[0] });
   } catch (error) {
     console.error(error);
     if (insertedEmployee) {
-      await pool.query('DELETE FROM tbl_employee WHERE employee_id = $1', [insertedEmployee.employee_id]).catch(() => {});
+      await pool.query("DELETE FROM tbl_employee WHERE employee_id = $1", [insertedEmployee.employee_id]).catch(() => {});
     }
-    return res.status(500).json({ statusCode: 500, message: 'Failed — rolled back', error: error.message });
+    return res.status(500).json({ statusCode: 500, message: "Failed — rolled back", error: error.message });
   }
 };
 
-// EDIT — update DB record + re-sync name on device
 exports.editEmployeeWithDevice = async (req, res) => {
   const { employee_id } = req.params;
-  const { employee_name, department_id, designation, mobile_number, status, device_ip, device_port } = req.body;
+  const { employee_name, department_id, designation, mobile_number, status } = req.body;
+  const { device_ip, device_port } = resolveDevice(req.body);
 
   try {
-    const existing = await pool.query('SELECT * FROM tbl_employee WHERE employee_id = $1', [employee_id]);
-    if (!existing.rows.length) return res.status(404).json({ statusCode: 404, message: 'Employee not found' });
+    const existing = await pool.query("SELECT * FROM tbl_employee WHERE employee_id = $1", [employee_id]);
+    if (!existing.rows.length) return res.status(404).json({ statusCode: 404, message: "Employee not found" });
 
     const updated = await pool.query(
       `UPDATE tbl_employee
@@ -51,167 +59,84 @@ exports.editEmployeeWithDevice = async (req, res) => {
       [employee_name, department_id, designation, mobile_number, status, employee_id]
     );
 
-    // re-write the name on the device too, so both stay in sync
     if (device_ip) {
-      await deviceService.createDeviceUser(
-        device_ip, device_port || 4370, employee_id, String(employee_id), employee_name
-      );
+      await deviceService.createDeviceUser(device_ip, device_port, employee_id, String(employee_id), employee_name);
     }
 
-    return res.status(200).json({ statusCode: 200, message: 'Employee updated in DB and device', data: updated.rows[0] });
+    return res.status(200).json({ statusCode: 200, message: "Employee updated Sucessfully", data: updated.rows[0] });
   } catch (error) {
     console.error(error);
-    return res.status(500).json({ statusCode: 500, message: 'Internal Server Error', error: error.message });
+    return res.status(500).json({ statusCode: 500, message: "Internal Server Error", error: error.message });
   }
 };
 
-// DELETE — remove from DB + device
 exports.deleteEmployeeWithDevice = async (req, res) => {
   const { employee_id } = req.params;
-  const { device_ip, device_port } = req.body;
+  const { device_ip, device_port } = resolveDevice(req.body);
 
   try {
-    const existing = await pool.query('SELECT * FROM tbl_employee WHERE employee_id = $1', [employee_id]);
-    if (!existing.rows.length) return res.status(404).json({ statusCode: 404, message: 'Employee not found' });
+    const existing = await pool.query("SELECT * FROM tbl_employee WHERE employee_id = $1", [employee_id]);
+    if (!existing.rows.length) return res.status(404).json({ statusCode: 404, message: "Employee not found" });
 
     if (device_ip) {
-      await deviceService.deleteDeviceUser(device_ip, device_port || 4370, employee_id);
+      await deviceService.deleteDeviceUser(device_ip, device_port, employee_id);
     }
 
-    await pool.query('DELETE FROM tbl_employee WHERE employee_id = $1', [employee_id]);
+    await pool.query("DELETE FROM tbl_employee WHERE employee_id = $1", [employee_id]);
 
-    return res.status(200).json({ statusCode: 200, message: 'Employee deleted from DB and device' });
+    return res.status(200).json({ statusCode: 200, message: "Employee deleted Sucessfully" });
   } catch (error) {
     console.error(error);
-    return res.status(500).json({ statusCode: 500, message: 'Internal Server Error', error: error.message });
+    return res.status(500).json({ statusCode: 500, message: "Internal Server Error", error: error.message });
   }
 };
 
-// ENROLL — trigger device scan mode
-exports.enrollFingerprintRaw = async (req, res) => {
-  const { device_ip, device_port, user_id, finger_index } = req.body;
-  if (!device_ip || !user_id) {
-    return res.status(400).json({ statusCode: 400, message: 'device_ip and user_id are required' });
-  }
+
+
+
+
+
+
+exports.getEmployeeDashboardCounts = async (req, res) => {
   try {
-    await deviceService.startRemoteEnroll(device_ip, device_port || 4370, user_id, finger_index || 0);
-    return res.status(200).json({ statusCode: 200, message: 'Device in enroll mode — ask employee to place finger 3x' });
+    const countQuery = `
+      SELECT
+        COUNT(*) AS total_employees,
+        COUNT(CASE WHEN LOWER(status) = 'active' THEN 1 END) AS active_employees,
+        COUNT(CASE WHEN LOWER(status) = 'inactive' THEN 1 END) AS inactive_employees,
+        COUNT(CASE WHEN enrolled = true THEN 1 END) AS fp_registered,
+        COUNT(CASE WHEN enrolled = false THEN 1 END) AS fp_not_registered
+      FROM tbl_employee;
+    `;
+
+    const employeeQuery = `
+      SELECT
+        e.employee_id, e.employee_name, e.department_id, d.department_name,
+        e.designation, e.mobile_number, e.status, e.device_user_id,
+        CASE WHEN e.enrolled = true THEN 'Registered' ELSE 'Not Registered' END AS fingerprint_status
+      FROM tbl_employee e
+      LEFT JOIN tbl_department d ON e.department_id = d.department_id
+      ORDER BY e.employee_id DESC;
+    `;
+
+    const countResult = await pool.query(countQuery);
+    const employeeResult = await pool.query(employeeQuery);
+    const countData = countResult.rows[0];
+
+    return res.status(200).json({
+      statusCode: 200,
+      message: "Employee dashboard details fetched successfully",
+      counts: {
+        total_employees: Number(countData.total_employees),
+        active_employees: Number(countData.active_employees),
+        inactive_employees: Number(countData.inactive_employees),
+        fp_registered: Number(countData.fp_registered),
+        fp_not_registered: Number(countData.fp_not_registered),
+      },
+      employees: employeeResult.rows,
+    });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ statusCode: 500, message: 'Internal Server Error', error: error.message });
+    console.error("Get Employee Dashboard Counts Error:", error);
+    return res.status(500).json({ statusCode: 500, message: "Internal server error", error: error.message });
   }
-};
-
-// CONFIRM — check template exists, flip enrolled=true in DB
-exports.confirmEnrollment = async (req, res) => {
-  const { employee_id, device_ip, device_port, finger_index } = req.body;
-  try {
-    const empResult = await pool.query('SELECT * FROM tbl_employee WHERE employee_id = $1', [employee_id]);
-    if (!empResult.rows.length) return res.status(404).json({ statusCode: 404, message: 'Employee not found' });
-
-    const check = await deviceService.checkFingerprintExists(device_ip, device_port || 4370, employee_id, finger_index || 0);
-    if (!check.exists) {
-      return res.status(400).json({ statusCode: 400, message: 'No fingerprint found yet — ask employee to scan again' });
-    }
-
-    const updated = await pool.query('UPDATE tbl_employee SET enrolled = true WHERE employee_id = $1 RETURNING *', [employee_id]);
-    return res.status(200).json({ statusCode: 200, message: 'Enrollment confirmed', data: updated.rows[0] });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ statusCode: 500, message: 'Internal Server Error', error: error.message });
-  }
-};
-
-// SYNC — pull attendance from device, save new records to DB
-exports.syncAttendance = async (req, res) => {
-  const { device_id, device_ip, device_port } = req.body;
-  if (!device_id || !device_ip) {
-    return res.status(400).json({ statusCode: 400, message: 'device_id and device_ip are required' });
-  }
-  try {
-    const logs = await deviceService.getDeviceAttendance(device_ip, device_port || 4370);
-    let inserted = 0;
-    const results = [];
-
-    for (const log of logs) {
-      const empResult = await pool.query(
-        'SELECT employee_id, employee_name FROM tbl_employee WHERE device_user_id = $1',
-        [String(log.deviceUserId)]
-      );
-      const employee = empResult.rows[0] || null;
-
-      const insertResult = await pool.query(
-        `INSERT INTO tbl_attendance_log (employee_id, device_user_id, device_id, punch_time, verify_mode)
-         VALUES ($1, $2, $3, $4, $5)
-         ON CONFLICT (device_user_id, punch_time, device_id) DO NOTHING
-         RETURNING *`,
-        [employee?.employee_id || null, String(log.deviceUserId), device_id, log.recordTime, log.verifyMode || null]
-      );
-
-      if (insertResult.rows.length) {
-        inserted++;
-        results.push({ employee_name: employee?.employee_name || 'Unknown', punch_time: log.recordTime });
-      }
-    }
-
-    return res.status(200).json({ statusCode: 200, message: 'Attendance synced', totalPulled: logs.length, newRecords: inserted, data: results });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ statusCode: 500, message: 'Internal Server Error', error: error.message });
-  }
-};
-
-// READ — attendance logs from DB (post-sync)
-exports.getAttendanceLogs = async (req, res) => {
-  try {
-    const result = await pool.query(
-      `SELECT a.log_id, e.employee_name, a.punch_time, a.verify_mode
-       FROM tbl_attendance_log a
-       LEFT JOIN tbl_employee e ON a.employee_id = e.employee_id
-       ORDER BY a.punch_time DESC
-       LIMIT 100`
-    );
-    return res.status(200).json({ statusCode: 200, data: result.rows });
-  } catch (error) {
-    console.error(error);
-    return res.status(500).json({ statusCode: 500, message: 'Internal Server Error' });
-  }
-};
-
-
-// Get all employees
-exports.getEmployees = async (req, res) => {
-    try {
-        const result = await pool.query(`
-            SELECT 
-                e.employee_id,
-                e.employee_name,
-                e.department_id,
-                d.department_name,
-                e.designation,
-                e.mobile_number,
-                e.status,
-                e.device_user_id
-            FROM tbl_employee e
-            LEFT JOIN tbl_department d
-                ON e.department_id = d.department_id
-            ORDER BY e.employee_id DESC
-        `);
-
-        return res.status(200).json({
-            statusCode: 200,
-            message: 'Employee details fetched successfully',
-            count: result.rows.length,
-            data: result.rows
-        });
-
-    } catch (error) {
-        console.error('Get Employees Error:', error);
-
-        return res.status(500).json({
-            statusCode: 500,
-            message: 'Internal server error',
-            error: error.message
-        });
-    }
 };

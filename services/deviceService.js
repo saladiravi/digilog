@@ -2,7 +2,77 @@
 // services/deviceService.js
 const ZKLib = require('node-zklib');
 const { COMMANDS } = require('node-zklib/constants');
+const { createTCPHeader, decodeTCPHeader } = require('node-zklib/utils');
+
+// existing function you already have — trigger the device into enroll/scan mode
+async function startRemoteEnroll(ip, port, userId, fingerIndex = 0) {
+  const zk = new ZKLib(ip, port, 10000, 4000);
+  await zk.createSocket();
+
+  try {
+    const buf = Buffer.alloc(26, 0);
+    buf.write(String(userId), 0, 'ascii');
+    buf.writeUInt8(fingerIndex, 24);
+    buf.writeUInt8(1, 25);
+
+    await zk.zklibTcp.executeCmd(COMMANDS.CMD_CANCELCAPTURE, '');
+    await zk.zklibTcp.executeCmd(COMMANDS.CMD_STARTENROLL, buf);
+    await zk.zklibTcp.executeCmd(COMMANDS.CMD_STARTVERIFY, '');
+
+    return { status: 'enroll_mode_started' };
+  } finally {
+    await zk.disconnect();
+  }
+}
+
+// new function — listens for finger-placed / enroll-progress events live
+async function listenForEnrollEvents(ip, port, onEvent) {
+  const zk = new ZKLib(ip, port, 10000, 4000);
+  await zk.createSocket();
+
+  const socket = zk.zklibTcp.socket;
+  const sessionId = zk.zklibTcp.sessionId;
+  const replyId = ++zk.zklibTcp.replyId;
+
+  const eventMask =
+    COMMANDS.EF_ATTLOG |
+    COMMANDS.EF_FINGER |
+    COMMANDS.EF_ENROLLFINGER |
+    COMMANDS.EF_ENROLLUSER |
+    COMMANDS.EF_VERIFY;
+
+  const maskBuf = Buffer.alloc(4);
+  maskBuf.writeUInt32LE(eventMask, 0);
+
+  const regBuf = createTCPHeader(COMMANDS.CMD_REG_EVENT, sessionId, replyId, maskBuf);
+  socket.write(regBuf);
+
+  socket.on('data', (data) => {
+    try {
+      decodeTCPHeader(data); // validates it's a real TCP-framed packet
+      const payload = data.subarray(8);
+      const eventCode = payload.readUIntLE(4, 2);
+
+      let label = 'unknown';
+      if (eventCode === COMMANDS.EF_FINGER) label = 'finger_placed';
+      else if (eventCode === COMMANDS.EF_ENROLLFINGER) label = 'enroll_finger_result';
+      else if (eventCode === COMMANDS.EF_ENROLLUSER) label = 'enroll_user_event';
+      else if (eventCode === COMMANDS.EF_ATTLOG) label = 'attendance_log';
+      else if (eventCode === COMMANDS.EF_VERIFY) label = 'verify_event';
+
+      console.log(`📡 raw event: code=${eventCode} label=${label} hex=${payload.toString('hex')}`);
+      onEvent({ eventCode, label, raw: payload });
+    } catch (err) {
+      console.error('event decode error:', err.message);
+    }
+  });
+
+  return zk; // keep this reference alive — don't disconnect while listening
+}
+
  
+
+
 async function connectDevice(ip, port = 4370) {
   const zk = new ZKLib(ip, port, 10000, 4000);
   await zk.createSocket();
@@ -56,18 +126,7 @@ async function createDeviceUser(ip, port, userSn, userId, name, password = '') {
     await zk.disconnect();
   }
 }
-
-// async function getDeviceAttendance(ip, port) {
-//   const zk = await connectDevice(ip, port);
-//   try {
-//     const logs = await zk.getAttendances();
-//     return logs.data; // [{ userId, timestamp, ... }]
-//   } finally {
-//     await zk.disconnect();
-//   }
-// }
-
-
+ 
 
 async function startRemoteEnroll(ip, port, userId, fingerIndex = 0) {
   const zk = new ZKLib(ip, port, 10000, 4000);
@@ -103,7 +162,20 @@ async function checkFingerprintExists(ip, port, userSn, fingerIndex = 0) {
     const reply = await zk.zklibTcp.executeCmd(COMMANDS.CMD_USERTEMP_RRQ, buf);
     const replyCode = reply.readUInt16LE(0);
 
-    return { exists: replyCode === COMMANDS.CMD_ACK_OK || replyCode === COMMANDS.CMD_ACK_DATA };
+    // template exists → device starts a data-transfer sequence, beginning with CMD_PREPARE_DATA
+    if (replyCode === COMMANDS.CMD_PREPARE_DATA) {
+      return { exists: true };
+    }
+
+    // template doesn't exist → device replies immediately with CMD_ACK_ERROR
+    if (replyCode === COMMANDS.CMD_ACK_ERROR) {
+      return { exists: false };
+    }
+
+    // anything else is unexpected — log it so we can see what the device actually sent
+    console.log('Unexpected checkFingerprint reply code:', replyCode);
+    return { exists: false, note: 'unexpected reply code, treat as unknown' };
+
   } finally {
     await zk.disconnect();
   }
@@ -123,4 +195,4 @@ async function deleteDeviceUser(ip, port, userSn) {
     await zk.disconnect();
   }
 }
-module.exports = { startRemoteEnroll,connectDevice, getDeviceUsers, createDeviceUser, getDeviceAttendance,checkFingerprintExists ,deleteDeviceUser};
+module.exports = {  startRemoteEnroll,listenForEnrollEvents, startRemoteEnroll,connectDevice, getDeviceUsers, createDeviceUser, getDeviceAttendance,checkFingerprintExists ,deleteDeviceUser};
