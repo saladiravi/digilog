@@ -10,9 +10,8 @@ const resolveDevice = (body) => ({
 
 exports.addEmployeeWithDevice = async (req, res) => {
   const { employee_name, department_id, designation, mobile_number, status } = req.body;
-  const { device_ip, device_port } = resolveDevice(req.body);
 
-  if (!employee_name || !device_ip || !department_id) {
+  if (!employee_name || !department_id) {
     return res.status(400).json({ statusCode: 400, message: "employee name and department are required" });
   }
 
@@ -26,14 +25,25 @@ exports.addEmployeeWithDevice = async (req, res) => {
     insertedEmployee = empResult.rows[0];
     const employeeId = insertedEmployee.employee_id;
 
-    await deviceService.createDeviceUser(device_ip, device_port, employeeId, String(employeeId), employee_name);
-
-    const updated = await pool.query(
-      "UPDATE tbl_employee SET device_user_id = $1 WHERE employee_id = $2 RETURNING *",
-      [String(employeeId), employeeId]
+    // NOTE: this used to call deviceService.createDeviceUser() directly over TCP (node-zklib),
+    // which required AWS to reach the device's LAN IP — impossible without a VPN/tunnel.
+    // Now we queue the command instead. The device (via ADMS) polls /iclock/getrequest.aspx
+    // and picks this up on its own, then reports success back via /iclock/devicecmd.aspx.
+    await pool.query(
+      `INSERT INTO tbl_device_commands (device_sn, command, status)
+       VALUES ($1, $2, 'pending')`,
+      [
+        process.env.DEVICE_SERIAL,
+        `DATA UPDATE USERINFO PIN=${employeeId}\tName=${employee_name}\tPri=0`,
+      ]
     );
 
-    return res.status(201).json({ statusCode: 201, message: "Employee added Sucessfully", data: updated.rows[0] });
+    // device_user_id is set once devicecmd.aspx confirms the write succeeded — see routes/adms.js
+    return res.status(202).json({
+      statusCode: 202,
+      message: "Employee saved — queued for device sync (device will pick it up on its next check-in)",
+      data: insertedEmployee,
+    });
   } catch (error) {
     console.error(error);
     if (insertedEmployee) {

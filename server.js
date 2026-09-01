@@ -12,7 +12,7 @@ const deviceroutes=require('./routes/deviceroutes');
 const userroutes=require('./routes/userroutes');
 const attendenceroutes=require('./routes/attendenceroutes');
 const dashbboardroutes=require('./routes/dashboardsroutes');
-
+const admsRoutes = require('./routes/adms');
 
 const app = express();
  
@@ -27,7 +27,7 @@ app.use('/device', deviceroutes);
 app.use('/user',userroutes);
 app.use('/attendence',attendenceroutes);
 app.use('/dashboard',dashbboardroutes);
-
+app.use(admsRoutes);
 
 cron.schedule('0 12 * * *', () => {
   console.log('⏰ Running scheduled sync — 12:00 PM');
