@@ -68,33 +68,189 @@ router.get('/iclock/getrequest.aspx', async (req, res) => {
 
 // Device reports the result of an executed command
 // POST /iclock/devicecmd.aspx?SN=...
-router.post('/iclock/devicecmd.aspx', express.text({ type: '*/*' }), async (req, res) => {
-  const { SN } = req.query;
-  console.log(`[ADMS] Command result from SN=${SN}: ${req.body}`);
+// router.post('/iclock/devicecmd.aspx', express.text({ type: '*/*' }), async (req, res) => {
+//   const { SN } = req.query;
+//   console.log(`[ADMS] Command result from SN=${SN}: ${req.body}`);
 
-  const match = req.body.match(/ID=(\d+)&Return=(-?\d+)/);
-  if (match) {
-    const [, id, ret] = match;
-    const success = ret === '0';
-    await pool.query(
-      `UPDATE tbl_device_commands SET status = $1 WHERE id = $2`,
-      [success ? 'success' : 'failed', id]
+//   const match = req.body.match(/ID=(\d+)&Return=(-?\d+)/);
+//   if (match) {
+//     const [, id, ret] = match;
+//     const success = ret === '0';
+//     await pool.query(
+//       `UPDATE tbl_device_commands SET status = $1 WHERE id = $2`,
+//       [success ? 'success' : 'failed', id]
+//     );
+
+//     if (success) {
+//       // Look up which employee this command was for and mark them synced
+//       const cmdRow = await pool.query(`SELECT * FROM tbl_device_commands WHERE id = $1`, [id]);
+//       const pinMatch = cmdRow.rows[0]?.command.match(/PIN=(\d+)/);
+//       if (pinMatch) {
+//         await pool.query(
+//           `UPDATE tbl_employee SET device_user_id = $1 WHERE employee_id = $1`,
+//           [pinMatch[1]]
+//         );
+//       }
+//     }
+//   }
+//   res.set('Content-Type', 'text/plain');
+//   res.send('OK');
+// });
+
+
+router.post(
+  '/iclock/devicecmd.aspx',
+  express.text({ type: '*/*' }),
+  async (req, res) => {
+
+    const { SN } = req.query;
+
+    console.log(
+      `[ADMS] Command result from SN=${SN}: ${req.body}`
     );
 
-    if (success) {
-      // Look up which employee this command was for and mark them synced
-      const cmdRow = await pool.query(`SELECT * FROM tbl_device_commands WHERE id = $1`, [id]);
-      const pinMatch = cmdRow.rows[0]?.command.match(/PIN=(\d+)/);
-      if (pinMatch) {
+    try {
+
+      const match = req.body.match(/ID=(\d+)&Return=(-?\d+)/);
+
+      if (match) {
+
+        const [, id, ret] = match;
+
+        const success = ret === '0';
+
+        // ----------------------------------------------
+        // Update command status
+        // ----------------------------------------------
+
         await pool.query(
-          `UPDATE tbl_employee SET device_user_id = $1 WHERE employee_id = $1`,
-          [pinMatch[1]]
+          `
+          UPDATE tbl_device_commands
+          SET status = $1
+          WHERE id = $2
+          `,
+          [
+            success ? 'success' : 'failed',
+            id
+          ]
         );
+
+        // ----------------------------------------------
+        // Get command
+        // ----------------------------------------------
+
+        const cmdRow = await pool.query(
+          `
+          SELECT *
+          FROM tbl_device_commands
+          WHERE id = $1
+          `,
+          [id]
+        );
+
+        if (cmdRow.rows.length > 0) {
+
+          const command = cmdRow.rows[0].command;
+
+          console.log(
+            `[ADMS] Command ${id} result=${ret}`
+          );
+
+          // --------------------------------------------
+          // Fingerprint enrollment command
+          // --------------------------------------------
+
+          if (
+            success &&
+            command.includes('ENROLL_FP')
+          ) {
+
+            const pinMatch = command.match(
+              /PIN=(\d+)/
+            );
+
+            if (pinMatch) {
+
+              const deviceUserId = pinMatch[1];
+
+              console.log(
+                `[ADMS] Fingerprint enrollment successful for PIN=${deviceUserId}`
+              );
+
+              // Find employee using device_user_id
+              const employeeResult = await pool.query(
+                `
+                SELECT employee_id
+                FROM tbl_employee
+                WHERE device_user_id = $1
+                   OR employee_id::text = $1
+                LIMIT 1
+                `,
+                [deviceUserId]
+              );
+
+              if (employeeResult.rows.length > 0) {
+
+                await pool.query(
+                  `
+                  UPDATE tbl_employee
+                  SET enrolled = true
+                  WHERE employee_id = $1
+                  `,
+                  [employeeResult.rows[0].employee_id]
+                );
+
+                console.log(
+                  `[ADMS] Employee ${employeeResult.rows[0].employee_id} marked enrolled=true`
+                );
+              }
+            }
+          }
+
+          // --------------------------------------------
+          // Other commands
+          // --------------------------------------------
+
+          if (
+            success &&
+            command.includes('C:') &&
+            !command.includes('ENROLL_FP')
+          ) {
+
+            const pinMatch = command.match(
+              /PIN=(\d+)/
+            );
+
+            if (pinMatch) {
+
+              const deviceUserId = pinMatch[1];
+
+              await pool.query(
+                `
+                UPDATE tbl_employee
+                SET device_user_id = $1
+                WHERE employee_id::text = $1
+                `,
+                [deviceUserId]
+              );
+            }
+          }
+        }
       }
+
+      res.set('Content-Type', 'text/plain');
+      res.send('OK');
+
+    } catch (error) {
+
+      console.error(
+        '[ADMS] devicecmd error:',
+        error
+      );
+
+      res.set('Content-Type', 'text/plain');
+      res.send('OK');
     }
   }
-  res.set('Content-Type', 'text/plain');
-  res.send('OK');
-});
-
+);
 module.exports = router;
