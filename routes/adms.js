@@ -7,23 +7,11 @@ const pool = require('../config/db'); // matches your actual project structure
 // GET /iclock/cdata.aspx?SN=...&options=all&language=69&pushver=2.4.1
 router.get('/iclock/cdata.aspx', async (req, res) => {
   const { SN, options } = req.query;
-  console.log(`[ADMS] Handshake from SN=${SN}`);
+  console.log(`[ADMS] Handshake from SN=${SN}, options=${options}`);
 
-  if (options === 'all') {
-    res.set('Content-Type', 'text/plain');
-    return res.send(
-      `GET OPTION FROM: ${SN}\n` +
-      `Stamp=9999\n` +
-      `OpStamp=9999\n` +
-      `ErrorDelay=30\n` +
-      `Delay=10\n` +
-      `TransTimes=00:00;23:59\n` +
-      `TransInterval=1\n` +
-      `TransFlag=1111000000\n` +
-      `Realtime=1\n` +
-      `Encrypt=0`
-    );
-  }
+  // Real-world ZKTeco/eSSL firmware expects a plain "OK" here — an elaborate
+  // config-string response can cause some firmware to get stuck retrying the
+  // handshake and never progress to polling /iclock/getrequest.aspx.
   res.set('Content-Type', 'text/plain');
   res.send('OK');
 });
