@@ -212,7 +212,6 @@
 // });
 
 // module.exports = router;
-
 // routes/adms.js
 const express = require('express');
 const router = express.Router();
@@ -246,11 +245,11 @@ router.post('/iclock/cdata.aspx', express.text({ type: '*/*' }), async (req, res
         const employeeId = empResult.rows[0]?.employee_id || null;
 
         const insertResult = await pool.query(
-          `INSERT INTO tbl_attendance_log (employee_id, device_user_id, device_id, punch_time, verify_mode)
-           VALUES ($1, $2, $3, $4, $5)
+          `INSERT INTO tbl_attendance_log (employee_id, device_user_id, device_id, device_sn, punch_time, verify_mode)
+           VALUES ($1, $2, $3, $4, $5, $6)
            ON CONFLICT (device_user_id, punch_time, device_id) DO NOTHING
            RETURNING *`,
-          [employeeId, deviceUserId, SN, punchTime, verifyMode || null]
+          [employeeId, deviceUserId, process.env.DEVICE_ID, SN, punchTime, verifyMode || null]
         );
 
         if (insertResult.rows.length && employeeId) {
