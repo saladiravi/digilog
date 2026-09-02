@@ -78,8 +78,13 @@ const deviceService = require("../services/deviceService");
 // Queues an ENROLL_BIO command. The device picks it up on its next poll,
 // puts itself into fingerprint-scan mode for this PIN, and reports back
 // automatically once the person scans (or times out after RETRY attempts).
+// enrollFingerprintRaw — ADMS reality check: this firmware does NOT execute
+// ENROLL_BIO (confirmed — device fetched the command, showed no scan prompt,
+// never reported back). Remote-triggered enrollment isn't possible on this
+// hardware/firmware combo. Enrollment must be started physically at the device.
+// This endpoint now just returns clear instructions instead of queuing anything.
 exports.enrollFingerprintRaw = async (req, res) => {
-  const { user_id, finger_index } = req.body;
+  const { user_id } = req.body;
 
   if (!user_id) {
     return res.status(400).json({ statusCode: 400, message: "user_id is required" });
@@ -108,17 +113,9 @@ exports.enrollFingerprintRaw = async (req, res) => {
       });
     }
 
-    await pool.query(
-      `INSERT INTO tbl_device_commands (device_sn, command, status) VALUES ($1, $2, 'pending')`,
-      [
-        process.env.DEVICE_SERIAL,
-        `ENROLL_BIO TYPE=1 NO=${finger_index || 0} PIN=${employee.device_user_id} RETRY=3 OVERWRITE=1`,
-      ]
-    );
-
     return res.status(200).json({
       statusCode: 200,
-      message: "Enroll command queued — device will enter fingerprint scan mode within its next check-in (~15-30s). Ask the employee to place their finger 3x when it does.",
+      message: `This device's firmware doesn't support remote-triggered enrollment. On the MB160 itself: Menu → User Mgmt → find PIN ${employee.device_user_id} (${employee.employee_name}) → Enroll Fingerprint. Once done, call /device/confirm-enrollment to check if the sync landed.`,
       data: { employee_id: employee.employee_id, device_user_id: employee.device_user_id },
     });
   } catch (error) {
