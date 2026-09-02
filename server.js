@@ -29,6 +29,9 @@ app.use('/attendence',attendenceroutes);
 app.use('/dashboard',dashbboardroutes);
 app.use(admsRoutes);
 
+
+
+
 cron.schedule('0 12 * * *', () => {
   console.log('⏰ Running scheduled sync — 12:00 PM');
   syncAttendanceFromDevice().catch(err => console.error('Cron sync failed:', err.message));

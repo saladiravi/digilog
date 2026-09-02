@@ -36,7 +36,7 @@ exports.addEmployeeWithDevice = async (req, res) => {
         process.env.DEVICE_SERIAL,
         `DATA UPDATE USERINFO PIN=${employeeId}\tName=${employee_name}\tPri=0`,
       ]
-    );
+    ); 
 
     // device_user_id is set once devicecmd.aspx confirms the write succeeded — see routes/adms.js
     return res.status(202).json({
@@ -56,7 +56,6 @@ exports.addEmployeeWithDevice = async (req, res) => {
 exports.editEmployeeWithDevice = async (req, res) => {
   const { employee_id } = req.params;
   const { employee_name, department_id, designation, mobile_number, status } = req.body;
-  const { device_ip, device_port } = resolveDevice(req.body);
 
   try {
     const existing = await pool.query("SELECT * FROM tbl_employee WHERE employee_id = $1", [employee_id]);
@@ -69,11 +68,26 @@ exports.editEmployeeWithDevice = async (req, res) => {
       [employee_name, department_id, designation, mobile_number, status, employee_id]
     );
 
-    if (device_ip) {
-      await deviceService.createDeviceUser(device_ip, device_port, employee_id, String(employee_id), employee_name);
+    // Queue the update instead of calling deviceService.createDeviceUser() directly.
+    // Only bother syncing to the device if this employee actually has a device_user_id
+    // (i.e. was already synced once) — otherwise there's nothing on the device to update yet.
+    if (existing.rows[0].device_user_id) {
+      await pool.query(
+        `INSERT INTO tbl_device_commands (device_sn, command, status) VALUES ($1, $2, 'pending')`,
+        [
+          process.env.DEVICE_SERIAL,
+          `DATA UPDATE USERINFO PIN=${existing.rows[0].device_user_id}\tName=${employee_name}\tPri=0`,
+        ]
+      );
     }
 
-    return res.status(200).json({ statusCode: 200, message: "Employee updated Sucessfully", data: updated.rows[0] });
+    return res.status(200).json({
+      statusCode: 200,
+      message: existing.rows[0].device_user_id
+        ? "Employee updated — device sync queued"
+        : "Employee updated (not yet synced to device, so nothing queued)",
+      data: updated.rows[0],
+    });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ statusCode: 500, message: "Internal Server Error", error: error.message });
@@ -82,19 +96,31 @@ exports.editEmployeeWithDevice = async (req, res) => {
 
 exports.deleteEmployeeWithDevice = async (req, res) => {
   const { employee_id } = req.params;
-  const { device_ip, device_port } = resolveDevice(req.body);
 
   try {
     const existing = await pool.query("SELECT * FROM tbl_employee WHERE employee_id = $1", [employee_id]);
     if (!existing.rows.length) return res.status(404).json({ statusCode: 404, message: "Employee not found" });
 
-    if (device_ip) {
-      await deviceService.deleteDeviceUser(device_ip, device_port, employee_id);
+    // Queue the delete instead of calling deviceService.deleteDeviceUser() directly.
+    if (existing.rows[0].device_user_id) {
+      await pool.query(
+        `INSERT INTO tbl_device_commands (device_sn, command, status) VALUES ($1, $2, 'pending')`,
+        [process.env.DEVICE_SERIAL, `DATA DELETE USERINFO PIN=${existing.rows[0].device_user_id}`]
+      );
     }
 
+    // NOTE: this deletes the employee row immediately, before the device confirms
+    // the delete happened. If you'd rather wait for confirmation first, this needs
+    // to become a soft-delete (a status flag) that only hard-deletes once
+    // devicecmd.aspx reports success — happy to build that version if you prefer it.
     await pool.query("DELETE FROM tbl_employee WHERE employee_id = $1", [employee_id]);
 
-    return res.status(200).json({ statusCode: 200, message: "Employee deleted Sucessfully" });
+    return res.status(200).json({
+      statusCode: 200,
+      message: existing.rows[0].device_user_id
+        ? "Employee deleted — device removal queued"
+        : "Employee deleted (was never synced to device, nothing to queue)",
+    });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ statusCode: 500, message: "Internal Server Error", error: error.message });

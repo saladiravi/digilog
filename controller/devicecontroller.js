@@ -74,7 +74,6 @@
 const pool = require("../config/db");
 const deviceService = require("../services/deviceService");
 
-
 // enrollFingerprintRaw — ADMS version
 // Queues an ENROLL_BIO command. The device picks it up on its next poll,
 // puts itself into fingerprint-scan mode for this PIN, and reports back
