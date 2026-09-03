@@ -134,7 +134,16 @@ exports.getMonthlyAttendanceByEmployee = async (req, res) => {
 
     const result = await pool.query(
       `SELECT
-         attendance_date, punch_in, punch_out, status, is_late
+         attendance_date, punch_in, punch_out, 
+           CASE 
+       WHEN punch_in IS NOT NULL AND punch_out IS NOT NULL
+       THEN ROUND(
+         (EXTRACT(EPOCH FROM (punch_out - punch_in)) / 3600.0)::numeric,
+         2
+       )
+       ELSE 0
+     END AS work_hours,
+     status, is_late
        FROM tbl_daily_attendance
        WHERE employee_id = $1
          AND date_trunc('month', attendance_date) = date_trunc('month', CURRENT_DATE)

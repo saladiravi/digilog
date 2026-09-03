@@ -196,9 +196,26 @@ exports.getAttendanceReport = async (req, res) => {
             endDate = today;
         }
 
-        const totalDays =
-            (new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24) + 1;
+        // const totalDays =
+        //     (new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24) + 1;
+let totalDays =
+    (new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24) + 1;
 
+// Do not count future days as absent
+const today = new Date().toISOString().split('T')[0];
+
+if (endDate > today) {
+    const effectiveEndDate = today;
+
+    if (startDate <= effectiveEndDate) {
+        totalDays =
+            (new Date(effectiveEndDate) - new Date(startDate)) /
+                (1000 * 60 * 60 * 24) +
+            1;
+    } else {
+        totalDays = 0;
+    }
+}
         // ── Employee-only filters (employee_id, search) — used standalone, no date params ──
         const employeeFilters = [`e.status = 'Active'`];
         const employeeParams = [];
