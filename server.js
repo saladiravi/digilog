@@ -16,6 +16,7 @@ const admsRoutes = require('./routes/adms');
 const shiftroutes=require('./routes/shiftsroutes');
 const leaveroutes=require('./routes/leaveroutes');
 const eventroutes=require('./routes/eventroutes');
+const expenditures=require('./routes/expenditureroutes');
 
 
 
@@ -36,6 +37,7 @@ app.use(admsRoutes);
 app.use('/shift',shiftroutes);
 app.use('/leave',leaveroutes);
 app.use('/event',eventroutes);
+app.use('/expenditure',expenditures);
 
 
 
