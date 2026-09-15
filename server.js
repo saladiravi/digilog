@@ -13,6 +13,11 @@ const userroutes=require('./routes/userroutes');
 const attendenceroutes=require('./routes/attendenceroutes');
 const dashbboardroutes=require('./routes/dashboardsroutes');
 const admsRoutes = require('./routes/adms');
+const shiftroutes=require('./routes/shiftsroutes');
+const leaveroutes=require('./routes/leaveroutes');
+const eventroutes=require('./routes/eventroutes');
+
+
 
 const app = express();
  
@@ -28,7 +33,9 @@ app.use('/user',userroutes);
 app.use('/attendence',attendenceroutes);
 app.use('/dashboard',dashbboardroutes);
 app.use(admsRoutes);
-
+app.use('/shift',shiftroutes);
+app.use('/leave',leaveroutes);
+app.use('/event',eventroutes);
 
 
 
