@@ -148,7 +148,8 @@ exports.employeeLogin = async (req, res) => {
         employee_name,
         enrolled,
         role,
-        email
+        email,
+        status
        FROM tbl_employee
        WHERE LOWER(email) = LOWER($1)`,
       [email.trim()]
