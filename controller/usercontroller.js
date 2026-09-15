@@ -72,7 +72,7 @@ exports.loginAdmin = async (req, res) => {
 
     // Find admin
     const result = await pool.query(
-      `SELECT admin_id, email, password
+      `SELECT admin_id, email, password,role
              FROM tbl_admin
              WHERE email = $1`,
       [email],
@@ -116,6 +116,7 @@ exports.loginAdmin = async (req, res) => {
       data: {
         admin_id: admin.admin_id,
         email: admin.email,
+        role:admin.role,
         token: token,
       },
     });
@@ -125,6 +126,77 @@ exports.loginAdmin = async (req, res) => {
     return res.status(500).json({
       statusCode: 500,
       message: "Internal server error",
+    });
+  }
+};
+
+
+exports.employeeLogin = async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    if (!email) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: "Email is required"
+      });
+    }
+
+    const result = await pool.query(
+      `SELECT 
+        employee_id,
+        employee_name,
+        enrolled,
+        role,
+        email
+       FROM tbl_employee
+       WHERE LOWER(email) = LOWER($1)`,
+      [email.trim()]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        statusCode: 404,
+        message: "Employee not found"
+      });
+    }
+
+    const employee = result.rows[0];
+
+    // Check employee status
+    if (employee.status.toLowerCase() !== "active") {
+      return res.status(403).json({
+        statusCode: 403,
+        message: "Employee account is inactive"
+      });
+    }
+
+    // Generate JWT
+    const token = jwt.sign(
+      {
+        employee_id: employee.employee_id,
+        email: employee.email,
+        role: employee.role
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "1d"
+      }
+    );
+
+    return res.status(200).json({
+      statusCode: 200,
+      message: "Login successfully",
+      token,
+      employee
+    });
+
+  } catch (error) {
+    console.error("Employee Login Error:", error);
+
+    return res.status(500).json({
+      statusCode: 500,
+      message: "Internal server error"
     });
   }
 };
