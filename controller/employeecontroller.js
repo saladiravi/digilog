@@ -9,18 +9,18 @@ const resolveDevice = (body) => ({
 });
 
 exports.addEmployeeWithDevice = async (req, res) => {
-  const { employee_name, department_id, designation, mobile_number, status } = req.body;
+  const { employee_name, department_id, designation, mobile_number, status,email,emp_code } = req.body;
 
-  if (!employee_name || !department_id) {
-    return res.status(400).json({ statusCode: 400, message: "employee name and department are required" });
+  if (!employee_name || !department_id || !email) {
+    return res.status(400).json({ statusCode: 400, message: "employee name ,email and department are required" });
   }
 
   let insertedEmployee = null;
   try {
     const empResult = await pool.query(
-      `INSERT INTO tbl_employee (employee_name, department_id, designation, mobile_number, status)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [employee_name, department_id, designation, mobile_number, status || "Active"]
+      `INSERT INTO tbl_employee (employee_name, department_id, designation, mobile_number, status,email,emp_code)
+       VALUES ($1, $2, $3, $4, $5,$6,$7) RETURNING *`,
+      [employee_name, department_id, designation, mobile_number, status || "Active",email,emp_code]
     );
     insertedEmployee = empResult.rows[0];
     const employeeId = insertedEmployee.employee_id;
@@ -55,7 +55,7 @@ exports.addEmployeeWithDevice = async (req, res) => {
 
 exports.editEmployeeWithDevice = async (req, res) => {
   const { employee_id } = req.params;
-  const { employee_name, department_id, designation, mobile_number, status } = req.body;
+  const { employee_name, department_id, designation, mobile_number, status,email,emp_code } = req.body;
 
   try {
     const existing = await pool.query("SELECT * FROM tbl_employee WHERE employee_id = $1", [employee_id]);
@@ -63,9 +63,9 @@ exports.editEmployeeWithDevice = async (req, res) => {
 
     const updated = await pool.query(
       `UPDATE tbl_employee
-       SET employee_name = $1, department_id = $2, designation = $3, mobile_number = $4, status = $5
-       WHERE employee_id = $6 RETURNING *`,
-      [employee_name, department_id, designation, mobile_number, status, employee_id]
+       SET employee_name = $1, department_id = $2, designation = $3, mobile_number = $4, status = $5,email=$6,emp_code=$7
+       WHERE employee_id = $8 RETURNING *`,
+      [employee_name, department_id, designation, mobile_number, status, employee_id,email,emp_code]
     );
 
     // Queue the update instead of calling deviceService.createDeviceUser() directly.

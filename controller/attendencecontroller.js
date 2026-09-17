@@ -79,45 +79,210 @@ exports.markAbsentees = async (req, res) => {
 // Unchanged logic, moved here as a standalone exported function so
 // routes/adms.js can call it right after inserting a fresh punch —
 // this replaces syncAttendanceFromDevice() as the trigger point.
+
+//old one 
+// exports.updateDailySummary = async function updateDailySummary(employeeId, punchTime) {
+//   if (!employeeId) return;
+
+//   const punchesResult = await pool.query(
+//     `SELECT punch_time
+//      FROM tbl_attendance_log
+//      WHERE employee_id = $1 AND DATE(punch_time) = DATE($2)
+//      ORDER BY punch_time ASC`,
+//     [employeeId, punchTime]
+//   );
+
+//   const punches = punchesResult.rows.map(r => r.punch_time);
+//   if (punches.length === 0) return;
+
+//   const officeStart = process.env.OFFICE_START_TIME || '09:30:00';
+
+//   const rows = [];
+//   for (let i = 0; i < punches.length; i += 2) {
+//     const punchIn = punches[i];
+//     const punchOut = punches[i + 1] || null;
+
+//     const isLate = new Date(punchIn).toTimeString().slice(0, 8) > officeStart;
+//     const status = isLate ? 'Late' : 'Present';
+
+//     rows.push({ punchIn, punchOut, status, isLate });
+//   }
+
+//   await pool.query(
+//     `DELETE FROM tbl_daily_attendance
+//      WHERE employee_id = $1 AND attendance_date = DATE($2)`,
+//     [employeeId, punchTime]
+//   );
+
+//   for (const row of rows) {
+//     await pool.query(
+//       `INSERT INTO tbl_daily_attendance
+//         (employee_id, attendance_date, punch_in, punch_out, status, is_late)
+//        VALUES ($1, DATE($2), $3, $4, $5, $6)`,
+//       [employeeId, punchTime, row.punchIn, row.punchOut, row.status, row.isLate]
+//     );
+//   }
+// };
+
+
+//updated one holiday and leave 
 exports.updateDailySummary = async function updateDailySummary(employeeId, punchTime) {
   if (!employeeId) return;
 
-  const punchesResult = await pool.query(
-    `SELECT punch_time
-     FROM tbl_attendance_log
-     WHERE employee_id = $1 AND DATE(punch_time) = DATE($2)
-     ORDER BY punch_time ASC`,
-    [employeeId, punchTime]
-  );
+  const attendanceDate = new Date(punchTime)
+    .toISOString()
+    .split('T')[0];
 
-  const punches = punchesResult.rows.map(r => r.punch_time);
-  if (punches.length === 0) return;
+  // --------------------------------------------------
+  // 1. Check Sunday
+  // --------------------------------------------------
+  const dateObj = new Date(`${attendanceDate}T00:00:00`);
+  const dayOfWeek = dateObj.getDay(); // 0 = Sunday
 
-  const officeStart = process.env.OFFICE_START_TIME || '09:30:00';
-
-  const rows = [];
-  for (let i = 0; i < punches.length; i += 2) {
-    const punchIn = punches[i];
-    const punchOut = punches[i + 1] || null;
-
-    const isLate = new Date(punchIn).toTimeString().slice(0, 8) > officeStart;
-    const status = isLate ? 'Late' : 'Present';
-
-    rows.push({ punchIn, punchOut, status, isLate });
+  if (dayOfWeek === 0) {
+    console.log(
+      `[Attendance] ${attendanceDate} is Sunday. No attendance processing.`
+    );
+    return;
   }
 
-  await pool.query(
-    `DELETE FROM tbl_daily_attendance
-     WHERE employee_id = $1 AND attendance_date = DATE($2)`,
-    [employeeId, punchTime]
+  // --------------------------------------------------
+  // 2. Check Event/Holiday
+  // --------------------------------------------------
+  const holidayResult = await pool.query(
+    `SELECT event_id, event_title, event_type
+     FROM tbl_event
+     WHERE event_date = $1::date
+       AND LOWER(event_type) = 'holiday'
+     LIMIT 1`,
+    [attendanceDate]
   );
 
-  for (const row of rows) {
+  if (holidayResult.rows.length > 0) {
+    console.log(
+      `[Attendance] ${attendanceDate} is a holiday: ${holidayResult.rows[0].event_title}`
+    );
+    return;
+  }
+
+  // --------------------------------------------------
+  // 3. Check Approved Leave
+  // --------------------------------------------------
+  const leaveResult = await pool.query(
+    `SELECT leave_id, leave_type, duration
+     FROM tbl_leaves
+     WHERE employee_id = $1
+       AND status = 'Approved'
+       AND from_date <= $2::date
+       AND to_date >= $2::date
+     LIMIT 1`,
+    [employeeId, attendanceDate]
+  );
+
+  if (leaveResult.rows.length > 0) {
+
+    // Remove any existing daily attendance
+    await pool.query(
+      `DELETE FROM tbl_daily_attendance
+       WHERE employee_id = $1
+         AND attendance_date = $2::date`,
+      [employeeId, attendanceDate]
+    );
+
+    // Approved leave -> Absent
     await pool.query(
       `INSERT INTO tbl_daily_attendance
         (employee_id, attendance_date, punch_in, punch_out, status, is_late)
-       VALUES ($1, DATE($2), $3, $4, $5, $6)`,
-      [employeeId, punchTime, row.punchIn, row.punchOut, row.status, row.isLate]
+       VALUES ($1, $2::date, NULL, NULL, 'Absent', false)`,
+      [employeeId, attendanceDate]
+    );
+
+    console.log(
+      `[Attendance] Employee ${employeeId} is on approved leave on ${attendanceDate}`
+    );
+
+    return;
+  }
+
+  // --------------------------------------------------
+  // 4. Get biometric punches
+  // --------------------------------------------------
+  const punchesResult = await pool.query(
+    `SELECT punch_time
+     FROM tbl_attendance_log
+     WHERE employee_id = $1
+       AND DATE(punch_time) = $2::date
+     ORDER BY punch_time ASC`,
+    [employeeId, attendanceDate]
+  );
+
+  const punches = punchesResult.rows.map(row => row.punch_time);
+
+  // --------------------------------------------------
+  // 5. No punch = do nothing
+  // --------------------------------------------------
+  if (punches.length === 0) {
+    return;
+  }
+
+  // --------------------------------------------------
+  // 6. Process punches
+  // --------------------------------------------------
+  const officeStart =
+    process.env.OFFICE_START_TIME || '09:30:00';
+
+  const rows = [];
+
+  for (let i = 0; i < punches.length; i += 2) {
+
+    const punchIn = punches[i];
+    const punchOut = punches[i + 1] || null;
+
+    const punchInTime = new Date(punchIn)
+      .toTimeString()
+      .slice(0, 8);
+
+    const isLate = punchInTime > officeStart;
+
+    const status = isLate
+      ? 'Late'
+      : 'Present';
+
+    rows.push({
+      punchIn,
+      punchOut,
+      status,
+      isLate
+    });
+  }
+
+  // --------------------------------------------------
+  // 7. Replace today's daily attendance
+  // --------------------------------------------------
+  await pool.query(
+    `DELETE FROM tbl_daily_attendance
+     WHERE employee_id = $1
+       AND attendance_date = $2::date`,
+    [employeeId, attendanceDate]
+  );
+
+  // --------------------------------------------------
+  // 8. Insert daily attendance
+  // --------------------------------------------------
+  for (const row of rows) {
+
+    await pool.query(
+      `INSERT INTO tbl_daily_attendance
+        (employee_id, attendance_date, punch_in, punch_out, status, is_late)
+       VALUES ($1, $2::date, $3, $4, $5, $6)`,
+      [
+        employeeId,
+        attendanceDate,
+        row.punchIn,
+        row.punchOut,
+        row.status,
+        row.isLate
+      ]
     );
   }
 };
