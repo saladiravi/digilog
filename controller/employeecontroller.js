@@ -65,7 +65,7 @@ exports.editEmployeeWithDevice = async (req, res) => {
       `UPDATE tbl_employee
        SET employee_name = $1, department_id = $2, designation = $3, mobile_number = $4, status = $5,email=$6,emp_code=$7
        WHERE employee_id = $8 RETURNING *`,
-      [employee_name, department_id, designation, mobile_number, status, employee_id,email,emp_code]
+      [employee_name, department_id, designation, mobile_number, status, employee_id,email,emp_code,employee_id]
     );
 
     // Queue the update instead of calling deviceService.createDeviceUser() directly.
@@ -148,7 +148,7 @@ exports.getEmployeeDashboardCounts = async (req, res) => {
     const employeeQuery = `
       SELECT
         e.employee_id, e.employee_name, e.department_id, d.department_name,
-        e.designation, e.mobile_number, e.status, e.device_user_id,e.email,e.emp_code
+        e.designation, e.mobile_number, e.status, e.device_user_id,e.email,e.emp_code,
         CASE WHEN e.enrolled = true THEN 'Registered' ELSE 'Not Registered' END AS fingerprint_status
       FROM tbl_employee e
       LEFT JOIN tbl_department d ON e.department_id = d.department_id
