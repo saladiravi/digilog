@@ -65,7 +65,7 @@ exports.editEmployeeWithDevice = async (req, res) => {
       `UPDATE tbl_employee
        SET employee_name = $1, department_id = $2, designation = $3, mobile_number = $4, status = $5,email=$6,emp_code=$7
        WHERE employee_id = $8 RETURNING *`,
-      [employee_name, department_id, designation, mobile_number, status, employee_id,email,emp_code,employee_id]
+      [employee_name, department_id, designation, mobile_number, status,email,emp_code,employee_id]
     );
 
     // Queue the update instead of calling deviceService.createDeviceUser() directly.
