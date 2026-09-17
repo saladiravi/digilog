@@ -148,7 +148,7 @@ exports.getEmployeeDashboardCounts = async (req, res) => {
     const employeeQuery = `
       SELECT
         e.employee_id, e.employee_name, e.department_id, d.department_name,
-        e.designation, e.mobile_number, e.status, e.device_user_id,
+        e.designation, e.mobile_number, e.status, e.device_user_id,e.email,e.emp_code
         CASE WHEN e.enrolled = true THEN 'Registered' ELSE 'Not Registered' END AS fingerprint_status
       FROM tbl_employee e
       LEFT JOIN tbl_department d ON e.department_id = d.department_id
