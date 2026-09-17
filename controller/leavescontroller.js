@@ -174,60 +174,13 @@ exports.getleavesbyemployee = async (req, res) => {
 
  
 exports.getleaves = async (req, res) => {
-    const {
-        leave_type,
-        status,
-        financial_year
-    } = req.query;
-
     try {
-
-        // -----------------------------
-        // Build filters
-        // -----------------------------
-        let conditions = [];
-        let values = [];
-        let index = 1;
-
-        if (leave_type && leave_type !== 'All') {
-            conditions.push(`tl.leave_type = $${index}`);
-            values.push(leave_type);
-            index++;
-        }
-
-        if (status && status !== 'All') {
-            conditions.push(`tl.status = $${index}`);
-            values.push(status);
-            index++;
-        }
-
-        // Example: 2026-27
-        // April 1, 2026 to March 31, 2027
-        if (financial_year) {
-            const [startYear] = financial_year.split('-');
-
-            const fyStart = `${startYear}-04-01`;
-            const fyEnd = `${parseInt(startYear) + 1}-03-31`;
-
-            conditions.push(
-                `tl.from_date >= $${index} AND tl.from_date <= $${index + 1}`
-            );
-
-            values.push(fyStart, fyEnd);
-            index += 2;
-        }
-
-        const whereClause =
-            conditions.length > 0
-                ? `WHERE ${conditions.join(' AND ')}`
-                : '';
-
 
         // -----------------------------
         // Dashboard Counts
         // -----------------------------
         const countQuery = `
-            SELECT
+            SELECT 
                 COUNT(*) AS total_requests,
 
                 COUNT(*) FILTER (
@@ -243,25 +196,21 @@ exports.getleaves = async (req, res) => {
                 ) AS rejected_leaves
 
             FROM tbl_leaves tl
-            ${whereClause}
         `;
 
-        const countResult = await pool.query(
-            countQuery,
-            values
-        );
+        const countResult = await pool.query(countQuery);
 
 
         // -----------------------------
         // Leave Details
         // -----------------------------
         const leaveQuery = `
-            SELECT
+            SELECT 
                 tl.leave_id,
                 tl.employee_id,
 
                 te.employee_name,
-                te.employee_code,
+                te.emp_code,
                 te.department_id,
 
                 tl.leave_type,
@@ -277,15 +226,10 @@ exports.getleaves = async (req, res) => {
             INNER JOIN tbl_employee te
                 ON tl.employee_id = te.employee_id
 
-            ${whereClause}
-
             ORDER BY tl.created_at DESC
         `;
 
-        const leaveResult = await pool.query(
-            leaveQuery,
-            values
-        );
+        const leaveResult = await pool.query(leaveQuery);
 
 
         // -----------------------------
