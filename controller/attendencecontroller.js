@@ -287,6 +287,75 @@ exports.updateDailySummary = async function updateDailySummary(employeeId, punch
   }
 };
 
+
+exports.processTodayApprovedLeaves = async function () {
+  const today = new Date().toISOString().split('T')[0];
+
+  // Sunday → no processing
+  const dateObj = new Date(`${today}T00:00:00`);
+
+  if (dateObj.getDay() === 0) {
+    console.log(`[Attendance] ${today} is Sunday.`);
+    return;
+  }
+
+  // Check holiday
+  const holidayResult = await pool.query(
+    `SELECT event_id
+     FROM tbl_event
+     WHERE event_date = $1::date
+       AND LOWER(event_type) = 'holiday'
+     LIMIT 1`,
+    [today]
+  );
+
+  if (holidayResult.rows.length > 0) {
+    console.log(`[Attendance] ${today} is a holiday.`);
+    return;
+  }
+
+  // Get employees who are on approved leave TODAY
+  const leaveResult = await pool.query(
+    `SELECT employee_id
+     FROM tbl_leaves
+     WHERE status = 'Approved'
+       AND from_date <= $1::date
+       AND to_date >= $1::date`,
+    [today]
+  );
+
+  for (const leave of leaveResult.rows) {
+
+    // Don't create duplicate attendance
+    const existing = await pool.query(
+      `SELECT 1
+       FROM tbl_daily_attendance
+       WHERE employee_id = $1
+         AND attendance_date = $2::date
+       LIMIT 1`,
+      [leave.employee_id, today]
+    );
+
+    if (existing.rows.length > 0) {
+      continue;
+    }
+
+    // Insert Absent ONLY for today
+    await pool.query(
+      `INSERT INTO tbl_daily_attendance
+        (employee_id, attendance_date, punch_in, punch_out, status, is_late)
+       VALUES ($1, $2::date, NULL, NULL, 'Absent', false)`,
+      [leave.employee_id, today]
+    );
+
+    console.log(
+      `[Attendance] Employee ${leave.employee_id} marked Absent for leave: ${today}`
+    );
+  }
+};
+
+
+
 // NOTE: no more syncAttendanceFromDevice() call — same reasoning as above
 exports.getMonthlyAttendanceByEmployee = async (req, res) => {
   const { employee_id } = req.params;

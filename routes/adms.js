@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
-const { updateDailySummary } = require('../controller/attendencecontroller');
+const { updateDailySummary ,processTodayApprovedLeaves} = require('../controller/attendencecontroller');
 
 // Device check-in / handshake
 router.get('/iclock/cdata.aspx', async (req, res) => {
@@ -44,6 +44,7 @@ router.post('/iclock/cdata.aspx', express.text({ type: '*/*' }), async (req, res
         console.error('[ADMS] Failed to insert attendance row:', err.message, line);
       }
     }
+    await processTodayApprovedLeaves();
   }
 
   if (table === 'FINGERTMP' && req.body) {
