@@ -770,9 +770,9 @@ exports.getAttendanceReport = async (req, res) => {
     // --------------------------------------------------
     const summaryQuery = `
       SELECT
-        COUNT(DISTINCT a.employee_id)
-          FILTER (WHERE a.status IN ('Present', 'Late'))
-          AS present_days,
+      COUNT(DISTINCT a.employee_id)
+        FILTER (WHERE a.status = 'Present')
+        AS present_days,
 
         COUNT(DISTINCT a.employee_id)
           FILTER (WHERE a.status = 'Late')

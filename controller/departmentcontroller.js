@@ -175,10 +175,10 @@ exports.getDepartmentEmployeeCounts = async (req, res) => {
         COUNT(e.employee_id) AS total_employees,
 
         COUNT(
-          CASE
-            WHEN LOWER(e.status) = 'Active' THEN 1
-          END
-        ) AS active_employees,
+            CASE
+                WHEN e.status = 'Active' THEN 1
+            END
+            ) AS active_employees,
 
         COUNT(
           CASE
@@ -193,7 +193,8 @@ exports.getDepartmentEmployeeCounts = async (req, res) => {
 
       GROUP BY
         d.department_id,
-        d.department_name
+        d.department_name,
+        d.department_head
 
       ORDER BY d.department_id DESC;
     `;
