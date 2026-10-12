@@ -1,7 +1,7 @@
-const pool=require('../config/db');
+const pool = require('../config/db');
 
 
- 
+
 exports.applyleave = async (req, res) => {
     const {
         employee_id,
@@ -44,10 +44,10 @@ exports.applyleave = async (req, res) => {
         });
     }
 };
- 
 
 
- 
+
+
 exports.approvelleave = async (req, res) => {
     const { leave_id, status } = req.query;
 
@@ -90,11 +90,11 @@ exports.approvelleave = async (req, res) => {
         });
     }
 };
- 
 
 
 
- 
+
+
 exports.getleavesbyemployee = async (req, res) => {
     const { employee_id } = req.query;
 
@@ -117,18 +117,23 @@ exports.getleavesbyemployee = async (req, res) => {
         // Leave counts
         const dashboardcount = await pool.query(
             `SELECT
-                COUNT(*) FILTER (WHERE status = 'Approved') AS consumed_leaves,
+                COALESCE(
+                SUM(duration) FILTER (WHERE status = 'Approved'),
+                0
+                ) AS consumed_leaves,
                 COUNT(*) FILTER (WHERE status = 'Pending') AS pending_requests
-             FROM tbl_leaves
-             WHERE employee_id = $1`,
+            FROM tbl_leaves
+            WHERE employee_id = $1`,
             [employee_id]
         );
 
-        const consumedLeaves =
-            parseInt(dashboardcount.rows[0].consumed_leaves) || 0;
+        const consumedLeaves = Number(
+            dashboardcount.rows[0].consumed_leaves
+        );
 
-        const pendingRequests =
-            parseInt(dashboardcount.rows[0].pending_requests) || 0;
+        const pendingRequests = Number(
+            dashboardcount.rows[0].pending_requests
+        );
 
         // Total leaves assigned to employee
         const totalLeaves = 12;
@@ -168,11 +173,11 @@ exports.getleavesbyemployee = async (req, res) => {
         });
     }
 };
- 
 
 
 
- 
+
+
 exports.getleaves = async (req, res) => {
     try {
 
@@ -180,7 +185,7 @@ exports.getleaves = async (req, res) => {
         // Dashboard Counts
         // -----------------------------
         const countQuery = `
-            SELECT 
+            SELECT
                 COUNT(*) AS total_requests,
 
                 COUNT(*) FILTER (
@@ -205,7 +210,7 @@ exports.getleaves = async (req, res) => {
         // Leave Details
         // -----------------------------
         const leaveQuery = `
-            SELECT 
+            SELECT
                 tl.leave_id,
                 tl.employee_id,
 
@@ -266,6 +271,6 @@ exports.getleaves = async (req, res) => {
         });
     }
 };
- 
+
 
 
