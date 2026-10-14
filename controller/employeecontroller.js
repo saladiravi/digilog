@@ -37,6 +37,8 @@ exports.addEmployeeWithDevice = async (req, res) => {
     department_id,
     email,
     emp_code,
+    mobile_number,
+    joining_date,
     basic_salary,
     account_holder_name,
     bank_name,
@@ -157,6 +159,7 @@ exports.addEmployeeWithDevice = async (req, res) => {
     Number(salaryFields.other_deductions);
 
   const netSalary = grossSalary - totalDeductions;
+  const annualCtc = grossSalary * 12;
 
   if (!Number.isFinite(netSalary) || netSalary < 0) {
     return res.status(400).json({
@@ -231,26 +234,28 @@ exports.addEmployeeWithDevice = async (req, res) => {
     const employeeId = insertedEmployee.employee_id;
 
     await client.query(
-      `INSERT INTO tbl_employee_salary(
-          employee_id,
-          basic_salary,
-          hra,
-          other_allowances,
-          pf_deduction,
-          professional_tax,
-          other_deductions,
-          gross_salary,
-          total_deductions,
-          net_salary,
-          effective_date
+      `INSERT INTO tbl_employee_salary (
+            employee_id,
+            basic_salary,
+            annual_ctc,
+            hra,
+            other_allowances,
+            pf_deduction,
+            professional_tax,
+            other_deductions,
+            gross_salary,
+            total_deductions,
+            net_salary,
+            effective_date
         )
-        VALUES(
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-          COALESCE($11:: date, CURRENT_DATE)
+        VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+            COALESCE($12::date, CURRENT_DATE)
         )`,
       [
         employeeId,
         Number(salaryFields.basic_salary),
+        annualCtc,
         Number(salaryFields.hra),
         Number(salaryFields.other_allowances),
         Number(salaryFields.pf_deduction),
@@ -315,6 +320,7 @@ exports.addEmployeeWithDevice = async (req, res) => {
           gross_salary: grossSalary,
           total_deductions: totalDeductions,
           net_salary: netSalary,
+          annual_ctc: annualCtc,
         },
       },
     });
