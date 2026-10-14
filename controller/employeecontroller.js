@@ -21,6 +21,7 @@ exports.addEmployeeWithDevice = async (req, res) => {
     basic_salary,
     hra,
     other_allowances,
+    travel_allowance,
     pf_deduction,
     professional_tax,
     other_deductions,
@@ -59,18 +60,33 @@ exports.addEmployeeWithDevice = async (req, res) => {
     }
   }
 
+  const stringFields = {
+    employee_name,
+    email,
+    emp_code,
+    mobile_number,
+    account_holder_name,
+    bank_name,
+    account_number,
+    ifsc_code,
+  };
+
+  for (const [field, value] of Object.entries(stringFields)) {
+    if (typeof value !== "string" || !value.trim()) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: `Valid ${field} is required`,
+      });
+    }
+  }
+
   if (
-    typeof employee_name !== "string" ||
-    typeof email !== "string" ||
-    typeof emp_code !== "string" ||
-    typeof account_holder_name !== "string" ||
-    typeof bank_name !== "string" ||
-    typeof account_number !== "string" ||
-    typeof ifsc_code !== "string"
+    typeof department_id !== "number" &&
+    !(typeof department_id === "string" && /^\d+$/.test(department_id))
   ) {
     return res.status(400).json({
       statusCode: 400,
-      message: "Invalid employee or bank details",
+      message: "Valid department ID is required",
     });
   }
 
@@ -84,38 +100,28 @@ exports.addEmployeeWithDevice = async (req, res) => {
     });
   }
 
-  const salaryFields = {
-    basic_salary,
-    hra: hra ?? 0,
-    other_allowances: other_allowances ?? 0,
-    pf_deduction: pf_deduction ?? 0,
-    professional_tax: professional_tax ?? 0,
-    other_deductions: other_deductions ?? 0,
+  const cleaned = {
+    employee_name: employee_name.trim(),
+    email: email.trim().toLowerCase(),
+    emp_code: emp_code.trim(),
+    mobile_number: mobile_number.trim(),
+    account_holder_name: account_holder_name.trim(),
+    bank_name: bank_name.trim(),
+    account_number: account_number.trim(),
+    ifsc_code: ifsc_code.trim().toUpperCase(),
   };
 
-  for (const [field, value] of Object.entries(salaryFields)) {
-    if (
-      typeof value !== "number" &&
-      !(typeof value === "string" && value.trim() !== "")
-    ) {
-      return res.status(400).json({
-        statusCode: 400,
-        message: `Valid ${field} is required`,
-      });
-    }
-
-    if (!Number.isFinite(Number(value)) || Number(value) < 0) {
-      return res.status(400).json({
-        statusCode: 400,
-        message: `${field} must be a non - negative number`,
-      });
-    }
-  }
-
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned.email)) {
     return res.status(400).json({
       statusCode: 400,
       message: "Valid email is required",
+    });
+  }
+
+  if (!/^[A-Za-z]{4}0[A-Za-z0-9]{6}$/.test(cleaned.ifsc_code)) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Valid IFSC code is required",
     });
   }
 
@@ -123,7 +129,8 @@ exports.addEmployeeWithDevice = async (req, res) => {
     typeof joining_date !== "string" ||
     !/^\d{4}-\d{2}-\d{2}$/.test(joining_date) ||
     !Number.isFinite(Date.parse(`${joining_date}T00:00:00Z`)) ||
-    new Date(`${joining_date}T00:00:00Z`).toISOString().slice(0, 10) !== joining_date
+    new Date(`${joining_date}T00:00:00Z`).toISOString().slice(0, 10) !==
+    joining_date
   ) {
     return res.status(400).json({
       statusCode: 400,
@@ -131,10 +138,21 @@ exports.addEmployeeWithDevice = async (req, res) => {
     });
   }
 
-  if (!/^[A-Za-z]{4}0[A-Za-z0-9]{6}$/.test(ifsc_code.trim())) {
+  if (
+    effective_date !== undefined &&
+    effective_date !== null &&
+    effective_date !== "" &&
+    (
+      typeof effective_date !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(effective_date) ||
+      !Number.isFinite(Date.parse(`${effective_date}T00:00:00Z`)) ||
+      new Date(`${effective_date}T00:00:00Z`).toISOString().slice(0, 10) !==
+      effective_date
+    )
+  ) {
     return res.status(400).json({
       statusCode: 400,
-      message: "Valid IFSC code is required",
+      message: "Valid effective date in YYYY-MM-DD format is required",
     });
   }
 
@@ -148,10 +166,35 @@ exports.addEmployeeWithDevice = async (req, res) => {
     });
   }
 
+  const salaryFields = {
+    basic_salary,
+    hra: hra ?? 0,
+    other_allowances: other_allowances ?? 0,
+    travel_allowance: travel_allowance ?? 0,
+    pf_deduction: pf_deduction ?? 0,
+    professional_tax: professional_tax ?? 0,
+    other_deductions: other_deductions ?? 0,
+  };
+
+  for (const [field, value] of Object.entries(salaryFields)) {
+    if (
+      (typeof value !== "number" &&
+        !(typeof value === "string" && value.trim() !== "")) ||
+      !Number.isFinite(Number(value)) ||
+      Number(value) < 0
+    ) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: `Valid non-negative ${field} is required`,
+      });
+    }
+  }
+
   const grossSalary =
     Number(salaryFields.basic_salary) +
     Number(salaryFields.hra) +
-    Number(salaryFields.other_allowances);
+    Number(salaryFields.other_allowances) +
+    Number(salaryFields.travel_allowance);
 
   const totalDeductions =
     Number(salaryFields.pf_deduction) +
@@ -161,10 +204,16 @@ exports.addEmployeeWithDevice = async (req, res) => {
   const netSalary = grossSalary - totalDeductions;
   const annualCtc = grossSalary * 12;
 
-  if (!Number.isFinite(netSalary) || netSalary < 0) {
+  if (
+    !Number.isFinite(grossSalary) ||
+    !Number.isFinite(totalDeductions) ||
+    !Number.isFinite(annualCtc) ||
+    !Number.isFinite(netSalary) ||
+    netSalary < 0
+  ) {
     return res.status(400).json({
       statusCode: 400,
-      message: "Total deductions cannot exceed gross salary",
+      message: "Invalid salary values or total deductions exceed gross salary",
     });
   }
 
@@ -186,22 +235,44 @@ exports.addEmployeeWithDevice = async (req, res) => {
 
     const existingEmployee = await client.query(
       `SELECT employee_id
-   FROM tbl_employee
-   WHERE LOWER(email) = LOWER($1)
-      OR emp_code = $2
-      OR mobile_number = $3
-   LIMIT 1`,
-      [email.trim(), emp_code.trim(), mobile_number.trim()]
+       FROM tbl_employee
+       WHERE LOWER(email) = LOWER($1)
+          OR emp_code = $2
+          OR mobile_number = $3
+       LIMIT 1`,
+      [
+        cleaned.email,
+        cleaned.emp_code,
+        cleaned.mobile_number,
+      ]
     );
 
-    if (existingEmployee.rows.length > 0) {
+    if (existingEmployee.rowCount > 0) {
       await client.query("ROLLBACK");
       transactionStarted = false;
 
       return res.status(409).json({
         success: false,
         statusCode: 409,
-        message: "Employee with this email, employee code, or mobile number already exists",
+        message:
+          "Employee with this email, employee code, or mobile number already exists",
+      });
+    }
+
+    const departmentResult = await client.query(
+      `SELECT department_id
+       FROM tbl_department
+       WHERE department_id = $1`,
+      [Number(department_id)]
+    );
+
+    if (departmentResult.rowCount === 0) {
+      await client.query("ROLLBACK");
+      transactionStarted = false;
+
+      return res.status(404).json({
+        statusCode: 404,
+        message: `Department with ID ${department_id} not found`,
       });
     }
 
@@ -219,13 +290,13 @@ exports.addEmployeeWithDevice = async (req, res) => {
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       RETURNING *`,
       [
-        employee_name.trim(),
+        cleaned.employee_name,
         Number(department_id),
-        designation?.trim() || null,
-        mobile_number?.trim() || null,
+        typeof designation === "string" ? designation.trim() || null : null,
+        cleaned.mobile_number,
         status || "Active",
-        email.trim().toLowerCase(),
-        emp_code.trim(),
+        cleaned.email,
+        cleaned.emp_code,
         joining_date,
       ]
     );
@@ -235,29 +306,31 @@ exports.addEmployeeWithDevice = async (req, res) => {
 
     await client.query(
       `INSERT INTO tbl_employee_salary (
-            employee_id,
-            basic_salary,
-            annual_ctc,
-            hra,
-            other_allowances,
-            pf_deduction,
-            professional_tax,
-            other_deductions,
-            gross_salary,
-            total_deductions,
-            net_salary,
-            effective_date
-        )
-        VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
-            COALESCE($12::date, CURRENT_DATE)
-        )`,
+        employee_id,
+        basic_salary,
+        annual_ctc,
+        hra,
+        other_allowances,
+        travel_allowance,
+        pf_deduction,
+        professional_tax,
+        other_deductions,
+        gross_salary,
+        total_deductions,
+        net_salary,
+        effective_date
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+        COALESCE($13::date, CURRENT_DATE)
+      )`,
       [
         employeeId,
         Number(salaryFields.basic_salary),
         annualCtc,
         Number(salaryFields.hra),
         Number(salaryFields.other_allowances),
+        Number(salaryFields.travel_allowance),
         Number(salaryFields.pf_deduction),
         Number(salaryFields.professional_tax),
         Number(salaryFields.other_deductions),
@@ -269,7 +342,7 @@ exports.addEmployeeWithDevice = async (req, res) => {
     );
 
     await client.query(
-      `INSERT INTO tbl_employee_bank_details(
+      `INSERT INTO tbl_employee_bank_details (
         employee_id,
         account_holder_name,
         bank_name,
@@ -277,27 +350,27 @@ exports.addEmployeeWithDevice = async (req, res) => {
         ifsc_code,
         branch_name
       )
-      VALUES($1, $2, $3, $4, $5, $6)`,
+      VALUES ($1, $2, $3, $4, $5, $6)`,
       [
         employeeId,
-        account_holder_name.trim(),
-        bank_name.trim(),
-        account_number.trim(),
-        ifsc_code.trim().toUpperCase(),
-        branch_name?.trim() || null,
+        cleaned.account_holder_name,
+        cleaned.bank_name,
+        cleaned.account_number,
+        cleaned.ifsc_code,
+        typeof branch_name === "string" ? branch_name.trim() || null : null,
       ]
     );
 
     await client.query(
-      `INSERT INTO tbl_device_commands(
+      `INSERT INTO tbl_device_commands (
         device_sn,
         command,
         status
       )
-      VALUES($1, $2, 'pending')`,
+      VALUES ($1, $2, 'pending')`,
       [
         process.env.DEVICE_SERIAL,
-        `DATA UPDATE USERINFO PIN = ${employeeId} \tName = ${employee_name.trim()} \tPri = 0`,
+        `DATA UPDATE USERINFO PIN = ${employeeId} \tName = ${cleaned.employee_name} \tPri = 0`,
       ]
     );
 
@@ -305,6 +378,7 @@ exports.addEmployeeWithDevice = async (req, res) => {
     transactionStarted = false;
 
     return res.status(202).json({
+      success: true,
       statusCode: 202,
       message:
         "Employee, salary and bank details saved. Device synchronization queued.",
@@ -314,6 +388,7 @@ exports.addEmployeeWithDevice = async (req, res) => {
           basic_salary: Number(salaryFields.basic_salary),
           hra: Number(salaryFields.hra),
           other_allowances: Number(salaryFields.other_allowances),
+          travel_allowance: Number(salaryFields.travel_allowance),
           pf_deduction: Number(salaryFields.pf_deduction),
           professional_tax: Number(salaryFields.professional_tax),
           other_deductions: Number(salaryFields.other_deductions),
@@ -322,6 +397,13 @@ exports.addEmployeeWithDevice = async (req, res) => {
           net_salary: netSalary,
           annual_ctc: annualCtc,
         },
+        bank_details: {
+          account_holder_name: account_holder_name.trim(),
+          bank_name: bank_name.trim(),
+          account_number: account_number.trim(),
+          ifsc_code: ifsc_code.trim().toUpperCase(),
+          branch_name: branch_name?.trim() || null,
+        },
       },
     });
   } catch (error) {
@@ -329,12 +411,12 @@ exports.addEmployeeWithDevice = async (req, res) => {
       await client.query("ROLLBACK").catch(() => { });
     }
 
-    console.error(error);
+    console.error("Add Employee With Device Error:", error);
 
     return res.status(500).json({
+      success: false,
       statusCode: 500,
       message: "Failed to create employee with salary and bank details",
-      error: error.message,
     });
   } finally {
     if (client) {
@@ -342,6 +424,7 @@ exports.addEmployeeWithDevice = async (req, res) => {
     }
   }
 };
+
 
 
 exports.editEmployeeWithDevice = async (req, res) => {
@@ -355,120 +438,275 @@ exports.editEmployeeWithDevice = async (req, res) => {
     status,
     email,
     emp_code,
+    basic_salary,
+    hra,
+    other_allowances,
+    travel_allowance,
+    pf_deduction,
+    professional_tax,
+    other_deductions,
+    effective_date,
+    account_holder_name,
+    bank_name,
+    account_number,
+    ifsc_code,
+    branch_name,
   } = req.body;
 
   let client;
+  let transactionStarted = false;
+
+  if (typeof employee_id !== "string" || !/^[1-9]\d*$/.test(employee_id)) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Valid employee ID is required",
+    });
+  }
+
+  const requiredFields = {
+    employee_name,
+    department_id,
+    designation,
+    joining_date,
+    mobile_number,
+    status,
+    email,
+    emp_code,
+    basic_salary,
+    account_holder_name,
+    bank_name,
+    account_number,
+    ifsc_code,
+  };
+
+  for (const [field, value] of Object.entries(requiredFields)) {
+    if (
+      value === undefined ||
+      value === null ||
+      (typeof value === "string" && !value.trim())
+    ) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: `${field} is required`,
+      });
+    }
+  }
+
+  const stringFields = {
+    employee_name,
+    designation,
+    mobile_number,
+    email,
+    emp_code,
+    account_holder_name,
+    bank_name,
+    account_number,
+    ifsc_code,
+  };
+
+  for (const [field, value] of Object.entries(stringFields)) {
+    if (typeof value !== "string" || !value.trim()) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: `Valid ${field} is required`,
+      });
+    }
+  }
+
+  const cleaned = {
+    employee_name: employee_name.trim(),
+    designation: designation.trim(),
+    mobile_number: mobile_number.trim(),
+    email: email.trim().toLowerCase(),
+    emp_code: emp_code.trim(),
+    account_holder_name: account_holder_name.trim(),
+    bank_name: bank_name.trim(),
+    account_number: account_number.trim(),
+    ifsc_code: ifsc_code.trim().toUpperCase(),
+    branch_name:
+      typeof branch_name === "string" ? branch_name.trim() || null : null,
+  };
+
+  if (
+    typeof department_id !== "number" &&
+    !(typeof department_id === "string" && /^\d+$/.test(department_id))
+  ) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Valid department ID is required",
+    });
+  }
+
+  if (
+    !Number.isSafeInteger(Number(department_id)) ||
+    Number(department_id) <= 0
+  ) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Valid department ID is required",
+    });
+  }
+
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleaned.email)) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Valid email address is required",
+    });
+  }
+
+  if (!/^[A-Za-z]{4}0[A-Za-z0-9]{6}$/.test(cleaned.ifsc_code)) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Valid IFSC code is required",
+    });
+  }
+
+  if (!["Active", "Inactive"].includes(status)) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Status must be Active or Inactive",
+    });
+  }
+
+  const isValidDate = (value) =>
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    Number.isFinite(Date.parse(`${value}T00:00:00Z`)) &&
+    new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+
+  if (!isValidDate(joining_date)) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Valid joining date in YYYY-MM-DD format is required",
+    });
+  }
+
+  if (
+    effective_date !== undefined &&
+    effective_date !== null &&
+    effective_date !== "" &&
+    !isValidDate(effective_date)
+  ) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Valid effective date in YYYY-MM-DD format is required",
+    });
+  }
+
+  const salaryFields = {
+    basic_salary,
+    hra: hra ?? 0,
+    other_allowances: other_allowances ?? 0,
+    travel_allowance: travel_allowance ?? 0,
+    pf_deduction: pf_deduction ?? 0,
+    professional_tax: professional_tax ?? 0,
+    other_deductions: other_deductions ?? 0,
+  };
+
+  for (const [field, value] of Object.entries(salaryFields)) {
+    if (
+      (typeof value !== "number" &&
+        !(typeof value === "string" && value.trim() !== "")) ||
+      !Number.isFinite(Number(value)) ||
+      Number(value) < 0
+    ) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: `Valid non-negative ${field} is required`,
+      });
+    }
+  }
+
+  const grossSalary =
+    Number(salaryFields.basic_salary) +
+    Number(salaryFields.hra) +
+    Number(salaryFields.other_allowances) +
+    Number(salaryFields.travel_allowance);
+
+  const totalDeductions =
+    Number(salaryFields.pf_deduction) +
+    Number(salaryFields.professional_tax) +
+    Number(salaryFields.other_deductions);
+
+  const netSalary = grossSalary - totalDeductions;
+  const annualCtc = grossSalary * 12;
+
+  if (
+    !Number.isFinite(grossSalary) ||
+    !Number.isFinite(totalDeductions) ||
+    !Number.isFinite(netSalary) ||
+    !Number.isFinite(annualCtc) ||
+    netSalary < 0
+  ) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Invalid salary values or total deductions exceed gross salary",
+    });
+  }
 
   try {
-    if (typeof employee_id !== "string" || !/^[1-9]\d*$/.test(employee_id)) {
-      return res.status(400).json({
-        statusCode: 400,
-        message: "Valid employee ID is required",
-      });
-    }
-
-    const cleanedName =
-      typeof employee_name === "string" ? employee_name.trim() : "";
-    const cleanedDesignation =
-      typeof designation === "string" ? designation.trim() : "";
-    const cleanedEmail =
-      typeof email === "string" ? email.trim().toLowerCase() : "";
-    const cleanedEmpCode =
-      typeof emp_code === "string" ? emp_code.trim() : "";
-    const cleanedMobileNumber =
-      typeof mobile_number === "string" ? mobile_number.trim() : "";
-    const cleanedStatus =
-      typeof status === "string" ? status.trim() : "";
-
-    if (
-      !cleanedName ||
-      !cleanedDesignation ||
-      !cleanedEmail ||
-      !cleanedEmpCode ||
-      !cleanedMobileNumber ||
-      !joining_date ||
-      department_id === undefined ||
-      department_id === null ||
-      cleanedStatus === ""
-    ) {
-      return res.status(400).json({
-        statusCode: 400,
-        message: "All employee fields are required",
-      });
-    }
-
-    if (!/^[1-9]\d*$/.test(String(department_id))) {
-      return res.status(400).json({
-        statusCode: 400,
-        message: "Valid department ID is required",
-      });
-    }
-
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanedEmail)) {
-      return res.status(400).json({
-        statusCode: 400,
-        message: "Valid email address is required",
-      });
-    }
-
-    if (!["Active", "Inactive"].includes(cleanedStatus)) {
-      return res.status(400).json({
-        statusCode: 400,
-        message: "Status must be Active or Inactive",
-      });
-    }
-
-    if (
-      typeof joining_date !== "string" ||
-      !/^\d{4}-\d{2}-\d{2}$/.test(joining_date) ||
-      !Number.isFinite(Date.parse(`${joining_date} T00:00:00Z`)) ||
-      new Date(`${joining_date} T00:00:00Z`).toISOString().slice(0, 10) !== joining_date
-    ) {
-      return res.status(400).json({
-        statusCode: 400,
-        message: "Valid joining date in YYYY-MM-DD format is required",
-      });
-    }
-
     client = await pool.connect();
+
     await client.query("BEGIN");
+    transactionStarted = true;
 
     const existing = await client.query(
       `SELECT employee_id, device_user_id
        FROM tbl_employee
        WHERE employee_id = $1
        FOR UPDATE`,
-      [employee_id]
+      [Number(employee_id)]
     );
 
     if (existing.rowCount === 0) {
       await client.query("ROLLBACK");
+      transactionStarted = false;
+
       return res.status(404).json({
         statusCode: 404,
         message: `Employee with ID ${employee_id} not found`,
       });
     }
 
+    const departmentResult = await client.query(
+      `SELECT department_id
+       FROM tbl_department
+       WHERE department_id = $1`,
+      [Number(department_id)]
+    );
+
+    if (departmentResult.rowCount === 0) {
+      await client.query("ROLLBACK");
+      transactionStarted = false;
+
+      return res.status(404).json({
+        statusCode: 404,
+        message: `Department with ID ${department_id} not found`,
+      });
+    }
+
     const duplicate = await client.query(
       `SELECT employee_id
-        FROM tbl_employee
-        WHERE employee_id <> $1
-  AND(
-    LOWER(email) = LOWER($2)
-            OR emp_code = $3
-            OR mobile_number = $4
-  )
+       FROM tbl_employee
+       WHERE employee_id <> $1
+         AND (
+           LOWER(email) = LOWER($2)
+           OR emp_code = $3
+           OR mobile_number = $4
+         )
        LIMIT 1`,
       [
-        employee_id,
-        cleanedEmail,
-        cleanedEmpCode,
-        cleanedMobileNumber,
+        Number(employee_id),
+        cleaned.email,
+        cleaned.emp_code,
+        cleaned.mobile_number,
       ]
     );
 
     if (duplicate.rowCount > 0) {
       await client.query("ROLLBACK");
+      transactionStarted = false;
+
       return res.status(409).json({
         statusCode: 409,
         message:
@@ -476,69 +714,227 @@ exports.editEmployeeWithDevice = async (req, res) => {
       });
     }
 
-    const updated = await client.query(
+    const updatedEmployeeResult = await client.query(
       `UPDATE tbl_employee
        SET employee_name = $1,
-  department_id = $2,
-  designation = $3,
-  joining_date = $4,
-  mobile_number = $5,
-  status = $6,
-  email = $7,
-  emp_code = $8
+           department_id = $2,
+           designation = $3,
+           joining_date = $4,
+           mobile_number = $5,
+           status = $6,
+           email = $7,
+           emp_code = $8
        WHERE employee_id = $9
-RETURNING * `,
+       RETURNING *`,
       [
-        cleanedName,
+        cleaned.employee_name,
         Number(department_id),
-        cleanedDesignation,
+        cleaned.designation,
         joining_date,
-        cleanedMobileNumber,
-        cleanedStatus,
-        cleanedEmail,
-        cleanedEmpCode,
-        employee_id,
+        cleaned.mobile_number,
+        status,
+        cleaned.email,
+        cleaned.emp_code,
+        Number(employee_id),
       ]
     );
 
-    if (existing.rows[0].device_user_id) {
+    const salaryResult = await client.query(
+      `SELECT salary_id
+       FROM tbl_employee_salary
+       WHERE employee_id = $1
+       ORDER BY effective_date DESC, salary_id DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [Number(employee_id)]
+    );
+
+    let savedSalary;
+
+    if (salaryResult.rowCount > 0) {
+      const salaryUpdateResult = await client.query(
+        `UPDATE tbl_employee_salary
+         SET basic_salary = $1,
+             annual_ctc = $2,
+             hra = $3,
+             other_allowances = $4,
+             travel_allowance = $5,
+             pf_deduction = $6,
+             professional_tax = $7,
+             other_deductions = $8,
+             gross_salary = $9,
+             total_deductions = $10,
+             net_salary = $11,
+             effective_date = COALESCE($12::date, effective_date)
+         WHERE salary_id = $13
+         RETURNING *`,
+        [
+          Number(salaryFields.basic_salary),
+          annualCtc,
+          Number(salaryFields.hra),
+          Number(salaryFields.other_allowances),
+          Number(salaryFields.travel_allowance),
+          Number(salaryFields.pf_deduction),
+          Number(salaryFields.professional_tax),
+          Number(salaryFields.other_deductions),
+          grossSalary,
+          totalDeductions,
+          netSalary,
+          effective_date || null,
+          salaryResult.rows[0].salary_id,
+        ]
+      );
+
+      savedSalary = salaryUpdateResult.rows[0];
+    } else {
+      const salaryInsertResult = await client.query(
+        `INSERT INTO tbl_employee_salary (
+          employee_id,
+          basic_salary,
+          annual_ctc,
+          hra,
+          other_allowances,
+          travel_allowance,
+          pf_deduction,
+          professional_tax,
+          other_deductions,
+          gross_salary,
+          total_deductions,
+          net_salary,
+          effective_date
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+          COALESCE($13::date, CURRENT_DATE)
+        )
+        RETURNING *`,
+        [
+          Number(employee_id),
+          Number(salaryFields.basic_salary),
+          annualCtc,
+          Number(salaryFields.hra),
+          Number(salaryFields.other_allowances),
+          Number(salaryFields.travel_allowance),
+          Number(salaryFields.pf_deduction),
+          Number(salaryFields.professional_tax),
+          Number(salaryFields.other_deductions),
+          grossSalary,
+          totalDeductions,
+          netSalary,
+          effective_date || null,
+        ]
+      );
+
+      savedSalary = salaryInsertResult.rows[0];
+    }
+
+    const bankResult = await client.query(
+      `SELECT employee_id
+       FROM tbl_employee_bank_details
+       WHERE employee_id = $1
+       FOR UPDATE`,
+      [Number(employee_id)]
+    );
+
+    let savedBankDetails;
+
+    if (bankResult.rowCount > 0) {
+      const bankUpdateResult = await client.query(
+        `UPDATE tbl_employee_bank_details
+         SET account_holder_name = $1,
+             bank_name = $2,
+             account_number = $3,
+             ifsc_code = $4,
+             branch_name = $5
+         WHERE employee_id = $6
+         RETURNING employee_id, account_holder_name, bank_name,
+                   account_number, ifsc_code, branch_name`,
+        [
+          cleaned.account_holder_name,
+          cleaned.bank_name,
+          cleaned.account_number,
+          cleaned.ifsc_code,
+          cleaned.branch_name,
+          Number(employee_id),
+        ]
+      );
+
+      savedBankDetails = bankUpdateResult.rows[0];
+    } else {
+      const bankInsertResult = await client.query(
+        `INSERT INTO tbl_employee_bank_details (
+          employee_id,
+          account_holder_name,
+          bank_name,
+          account_number,
+          ifsc_code,
+          branch_name
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING employee_id, account_holder_name, bank_name,
+                  account_number, ifsc_code, branch_name`,
+        [
+          Number(employee_id),
+          cleaned.account_holder_name,
+          cleaned.bank_name,
+          cleaned.account_number,
+          cleaned.ifsc_code,
+          cleaned.branch_name,
+        ]
+      );
+
+      savedBankDetails = bankInsertResult.rows[0];
+    }
+
+    const deviceUserId = existing.rows[0].device_user_id;
+
+    if (deviceUserId) {
       if (!process.env.DEVICE_SERIAL) {
         throw new Error("DEVICE_SERIAL is not configured");
       }
 
       await client.query(
-        `INSERT INTO tbl_device_commands(device_sn, command, status)
-VALUES($1, $2, 'pending')`,
+        `INSERT INTO tbl_device_commands (
+          device_sn,
+          command,
+          status
+        )
+        VALUES ($1, $2, 'pending')`,
         [
           process.env.DEVICE_SERIAL,
-          `DATA UPDATE USERINFO PIN = ${existing.rows[0].device_user_id} \tName = ${cleanedName} \tPri = 0`,
+          `DATA UPDATE USERINFO PIN = ${deviceUserId} \tName = ${cleaned.employee_name} \tPri = 0`,
         ]
       );
     }
 
     await client.query("COMMIT");
+    transactionStarted = false;
 
     return res.status(200).json({
+      success: true,
       statusCode: 200,
-      message: existing.rows[0].device_user_id
-        ? "Employee updated and device sync queued successfully"
-        : "Employee updated successfully; device sync was not queued because the employee is not synced to the device",
-      data: updated.rows[0],
+      message: deviceUserId
+        ? "Employee, salary and bank details updated. Device synchronization queued."
+        : "Employee, salary and bank details updated successfully. Device synchronization was not queued because the employee is not synced to the device.",
+      data: {
+        employee: updatedEmployeeResult.rows[0],
+        salary: savedSalary,
+        bank_details: savedBankDetails,
+      },
     });
   } catch (error) {
-    if (client) {
-      try {
-        await client.query("ROLLBACK");
-      } catch (rollbackError) {
+    if (client && transactionStarted) {
+      await client.query("ROLLBACK").catch((rollbackError) => {
         console.error("Employee update rollback error:", rollbackError);
-      }
+      });
     }
 
-    console.error("Edit Employee Error:", error);
+    console.error("Edit Employee With Device Error:", error);
 
     return res.status(500).json({
+      success: false,
       statusCode: 500,
-      message: "Internal server error",
+      message: "Failed to update employee, salary and bank details",
     });
   } finally {
     if (client) {
@@ -546,6 +942,7 @@ VALUES($1, $2, 'pending')`,
     }
   }
 };
+
 
 
 exports.updateEmployeeBankDetails = async (req, res) => {

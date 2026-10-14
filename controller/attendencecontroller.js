@@ -395,6 +395,7 @@ exports.getMonthlyAttendanceByEmployee = async (req, res) => {
              'basic_salary', s.basic_salary,
              'annual_ctc', s.annual_ctc,
              'hra', s.hra,
+             'travel_allowance', s.travel_allowance,
              'other_allowances', s.other_allowances,
              'pf_deduction', s.pf_deduction,
              'professional_tax', s.professional_tax,
