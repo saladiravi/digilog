@@ -80,7 +80,7 @@ exports.markAbsentees = async (req, res) => {
 // routes/adms.js can call it right after inserting a fresh punch —
 // this replaces syncAttendanceFromDevice() as the trigger point.
 
-//old one 
+//old one
 // exports.updateDailySummary = async function updateDailySummary(employeeId, punchTime) {
 //   if (!employeeId) return;
 
@@ -125,7 +125,7 @@ exports.markAbsentees = async (req, res) => {
 // };
 
 
-//updated one holiday and leave 
+//updated one holiday and leave
 exports.updateDailySummary = async function updateDailySummary(employeeId, punchTime) {
   if (!employeeId) return;
 
@@ -361,47 +361,135 @@ exports.getMonthlyAttendanceByEmployee = async (req, res) => {
   const { employee_id } = req.params;
 
   try {
-    const empCheck = await pool.query('SELECT * FROM tbl_employee WHERE employee_id = $1', [employee_id]);
-    if (!empCheck.rows.length) {
-      return res.status(404).json({ statusCode: 404, message: 'Employee not found' });
+    if (
+      typeof employee_id !== "string" ||
+      !/^[1-9]\d*$/.test(employee_id)
+    ) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: "Valid employee ID is required",
+      });
+    }
+
+    const employeeQuery = await pool.query(
+      `SELECT
+         e.employee_id,
+         e.employee_name,
+         e.department_id,
+         d.department_name,
+         e.designation,
+         e.mobile_number,
+         e.email,
+         e.emp_code,
+         e.status,
+         e.joining_date,
+         e.device_user_id,
+         CASE
+           WHEN e.enrolled = true THEN 'Registered'
+           ELSE 'Not Registered'
+         END AS fingerprint_status,
+         CASE
+           WHEN s.salary_id IS NULL THEN NULL
+           ELSE json_build_object(
+             'salary_id', s.salary_id,
+             'basic_salary', s.basic_salary,
+             'annual_ctc', s.annual_ctc,
+             'hra', s.hra,
+             'other_allowances', s.other_allowances,
+             'pf_deduction', s.pf_deduction,
+             'professional_tax', s.professional_tax,
+             'other_deductions', s.other_deductions,
+             'gross_salary', s.gross_salary,
+             'total_deductions', s.total_deductions,
+             'net_salary', s.net_salary,
+             'effective_date', s.effective_date
+           )
+         END AS salary,
+         CASE
+           WHEN b.employee_id IS NULL THEN NULL
+           ELSE json_build_object(
+             'account_holder_name', b.account_holder_name,
+             'bank_name', b.bank_name,
+             'account_number', b.account_number,
+             'ifsc_code', b.ifsc_code,
+             'branch_name', b.branch_name
+           )
+         END AS bank_details
+       FROM tbl_employee e
+       LEFT JOIN tbl_department d
+         ON d.department_id = e.department_id
+       LEFT JOIN LATERAL (
+         SELECT *
+         FROM tbl_employee_salary es
+         WHERE es.employee_id = e.employee_id
+         ORDER BY es.effective_date DESC, es.salary_id DESC
+         LIMIT 1
+       ) s ON TRUE
+       LEFT JOIN tbl_employee_bank_details b
+         ON b.employee_id = e.employee_id
+       WHERE e.employee_id = $1`,
+      [Number(employee_id)]
+    );
+
+    if (employeeQuery.rowCount === 0) {
+      return res.status(404).json({
+        statusCode: 404,
+        message: `Employee with ID ${employee_id} not found`,
+      });
     }
 
     const result = await pool.query(
       `SELECT
-         attendance_date, punch_in, punch_out, 
-           CASE 
-       WHEN punch_in IS NOT NULL AND punch_out IS NOT NULL
-       THEN ROUND(
-         (EXTRACT(EPOCH FROM (punch_out - punch_in)) / 3600.0)::numeric,
-         2
-       )
-       ELSE 0
-     END AS work_hours,
-     status, is_late
+         attendance_date,
+         punch_in,
+         punch_out,
+         CASE
+           WHEN punch_in IS NOT NULL AND punch_out IS NOT NULL
+           THEN ROUND(
+             (EXTRACT(EPOCH FROM (punch_out - punch_in)) / 3600.0)::numeric,
+             2
+           )
+           ELSE 0
+         END AS work_hours,
+         status,
+         is_late
        FROM tbl_daily_attendance
        WHERE employee_id = $1
-         AND date_trunc('month', attendance_date) = date_trunc('month', CURRENT_DATE)
+         AND attendance_date >= date_trunc('month', CURRENT_DATE)::date
+         AND attendance_date < (
+           date_trunc('month', CURRENT_DATE) + INTERVAL '1 month'
+         )::date
        ORDER BY attendance_date ASC`,
-      [employee_id]
+      [Number(employee_id)]
     );
 
     const summary = {
-      present: result.rows.filter(r => r.status === 'Present').length,
-      late: result.rows.filter(r => r.status === 'Late').length,
-      absent: result.rows.filter(r => r.status === 'Absent').length,
+      present: result.rows.filter(
+        (row) => row.status?.toLowerCase() === "present"
+      ).length,
+      late: result.rows.filter(
+        (row) => row.status?.toLowerCase() === "late"
+      ).length,
+      absent: result.rows.filter(
+        (row) => row.status?.toLowerCase() === "absent"
+      ).length,
       total_marked_days: result.rows.length,
     };
 
     return res.status(200).json({
       statusCode: 200,
-      employee_id: Number(employee_id),
-      employee_name: empCheck.rows[0].employee_name,
+      message: "Employee monthly attendance and details fetched successfully",
+      employee: employeeQuery.rows[0],
       month: new Date().toISOString().slice(0, 7),
       summary,
-      data: result.rows,
+      attendance: result.rows,
     });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ statusCode: 500, message: 'Internal Server Error', error: error.message });
+    console.error("Get Monthly Attendance By Employee Error:", error);
+
+    return res.status(500).json({
+      statusCode: 500,
+      message: "Internal server error",
+    });
   }
 };

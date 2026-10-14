@@ -2,9 +2,6 @@ require('dotenv').config();
 const express = require("express");
 const path = require("path");
 const cors = require("cors");
-const cron = require('node-cron');
-const { syncAttendanceFromDevice } = require('./controller/attendencecontroller');
-
 
 const departmentroutes = require('./routes/departmentroutes');
 const employeeroutes = require('./routes/employeeroutes');
@@ -48,18 +45,14 @@ app.use('/leave', leaveroutes);
 app.use('/event', eventroutes);
 app.use('/expenditure', expenditures);
 
-
-
-cron.schedule('0 12 * * *', () => {
-  console.log('⏰ Running scheduled sync — 12:00 PM');
-  syncAttendanceFromDevice().catch(err => console.error('Cron sync failed:', err.message));
+app.use((req, res) => {
+  return res.status(404).json({
+    success: false,
+    statusCode: 404,
+    message: `Route ${req.method} ${req.originalUrl} not found`,
+  });
 });
 
-// 8:00 PM (night)
-cron.schedule('0 20 * * *', () => {
-  console.log('⏰ Running scheduled sync — 8:00 PM');
-  syncAttendanceFromDevice().catch(err => console.error('Cron sync failed:', err.message));
-});
 
 app.listen(5000, "0.0.0.0", () => {
   console.log("Server is running on port 5000");

@@ -1,6 +1,5 @@
 const pool = require("../config/db");
 const bcrypt = require("bcryptjs");
-const authmiddleware = require("../middleware/authMiddleware");
 const jwt = require("jsonwebtoken");
 
 require("dotenv").config();
@@ -59,7 +58,7 @@ exports.registerAdmin = async (req, res) => {
 };
 
 exports.loginAdmin = async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password } = req.body || {};
 
   try {
     // Validation
@@ -116,7 +115,7 @@ exports.loginAdmin = async (req, res) => {
       data: {
         admin_id: admin.admin_id,
         email: admin.email,
-        role:admin.role,
+        role: admin.role,
         token: token,
       },
     });
@@ -132,7 +131,7 @@ exports.loginAdmin = async (req, res) => {
 
 
 exports.employeeLogin = async (req, res) => {
-  const { email } = req.body;
+  const { email } = req.body || {};
 
   try {
     if (!email) {
@@ -143,7 +142,7 @@ exports.employeeLogin = async (req, res) => {
     }
 
     const result = await pool.query(
-      `SELECT 
+      `SELECT
         employee_id,
         employee_name,
         enrolled,
