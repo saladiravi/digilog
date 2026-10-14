@@ -7,7 +7,8 @@ const { verifyToken } = require('../middleware/authMiddleware');
 router.post('/addemployeewithdevice', employeeController.addEmployeeWithDevice);
 router.put('/edit-employee-with-device/:employee_id', employeeController.editEmployeeWithDevice);
 router.delete('/delete-employee-with-device/:employee_id', employeeController.deleteEmployeeWithDevice);
-router.get('/getEmployees',employeeController.getEmployeeDashboardCounts);
- 
+router.get('/getEmployees', employeeController.getEmployeeDashboardCounts);
+router.get("/:employee_id", employeeController.getEmployeeById);
+
 
 module.exports = router;

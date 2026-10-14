@@ -482,7 +482,62 @@ exports.deleteEmployeeWithDevice = async (req, res) => {
 
 
 
+exports.getEmployeeById = async (req, res) => {
+  try {
+    const { employee_id } = req.params;
 
+    if (!/^[1-9]\d*$/.test(employee_id)) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: "Valid employee ID is required",
+      });
+    }
+
+    const employeeQuery = `
+      SELECT
+        e.employee_id,
+        e.employee_name,
+        e.department_id,
+        d.department_name,
+        e.designation,
+        e.mobile_number,
+        e.status,
+        e.device_user_id,
+        e.email,
+        e.emp_code,
+        CASE
+          WHEN e.enrolled = true THEN 'Registered'
+          ELSE 'Not Registered'
+        END AS fingerprint_status
+      FROM tbl_employee e
+      LEFT JOIN tbl_department d
+        ON e.department_id = d.department_id
+      WHERE e.employee_id = $1;
+    `;
+
+    const result = await pool.query(employeeQuery, [employee_id]);
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        statusCode: 404,
+        message: `Employee with ID ${employee_id} not found`,
+      });
+    }
+
+    return res.status(200).json({
+      statusCode: 200,
+      message: "Employee details fetched successfully",
+      employee: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Get Employee By ID Error:", error);
+
+    return res.status(500).json({
+      statusCode: 500,
+      message: "Internal server error",
+    });
+  }
+};
 
 
 

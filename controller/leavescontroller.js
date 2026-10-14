@@ -95,11 +95,18 @@ exports.approvelleave = async (req, res) => {
 
 
 
+
 exports.getleavesbyemployee = async (req, res) => {
     const { employee_id } = req.query;
 
     try {
-        // Check employee exists
+        if (!employee_id || !/^[1-9]\d*$/.test(employee_id)) {
+            return res.status(400).json({
+                statusCode: 400,
+                message: "Valid employee ID is required"
+            });
+        }
+
         const employee = await pool.query(
             `SELECT employee_id
              FROM tbl_employee
@@ -110,20 +117,25 @@ exports.getleavesbyemployee = async (req, res) => {
         if (employee.rowCount === 0) {
             return res.status(404).json({
                 statusCode: 404,
-                message: 'Employee Not Found'
+                message: `Employee with ID ${employee_id} not found`
             });
         }
 
-        // Leave counts
         const dashboardcount = await pool.query(
             `SELECT
                 COALESCE(
-                SUM(duration) FILTER (WHERE status = 'Approved'),
-                0
+                    SUM(
+                        NULLIF(TRIM(duration), '')::NUMERIC
+                    ) FILTER (
+                        WHERE LOWER(status) = 'approved'
+                    ),
+                    0
                 ) AS consumed_leaves,
-                COUNT(*) FILTER (WHERE status = 'Pending') AS pending_requests
-            FROM tbl_leaves
-            WHERE employee_id = $1`,
+                COUNT(*) FILTER (
+                    WHERE LOWER(status) = 'pending'
+                ) AS pending_requests
+             FROM tbl_leaves
+             WHERE employee_id = $1`,
             [employee_id]
         );
 
@@ -135,13 +147,12 @@ exports.getleavesbyemployee = async (req, res) => {
             dashboardcount.rows[0].pending_requests
         );
 
-        // Total leaves assigned to employee
         const totalLeaves = 12;
+        const availableLeaves = Math.max(
+            0,
+            totalLeaves - consumedLeaves
+        );
 
-        // Available leaves
-        const availableLeaves = totalLeaves - consumedLeaves;
-
-        // Employee leave history
         const leave = await pool.query(
             `SELECT *
              FROM tbl_leaves
@@ -152,27 +163,26 @@ exports.getleavesbyemployee = async (req, res) => {
 
         return res.status(200).json({
             statusCode: 200,
-            message: 'Leaves Fetched Successfully',
-
+            message: "Leaves fetched successfully",
             dashboard: {
                 total_leaves: totalLeaves,
                 available_leaves: availableLeaves,
                 pending_requests: pendingRequests,
                 consumed_leaves: consumedLeaves
             },
-
             leaves: leave.rows
         });
 
     } catch (error) {
-        console.error(error);
+        console.error("Get Leaves By Employee Error:", error);
 
         return res.status(500).json({
             statusCode: 500,
-            message: 'Internal Server Error'
+            message: "Internal server error"
         });
     }
 };
+
 
 
 
