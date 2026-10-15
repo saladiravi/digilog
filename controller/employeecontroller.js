@@ -11,6 +11,7 @@ const resolveDevice = (body) => ({
 exports.addEmployeeWithDevice = async (req, res) => {
   const {
     employee_name,
+    date_of_birth,
     department_id,
     designation,
     mobile_number,
@@ -35,6 +36,7 @@ exports.addEmployeeWithDevice = async (req, res) => {
 
   const requiredFields = {
     employee_name,
+    date_of_birth,
     department_id,
     email,
     emp_code,
@@ -279,6 +281,7 @@ exports.addEmployeeWithDevice = async (req, res) => {
     const empResult = await client.query(
       `INSERT INTO tbl_employee (
         employee_name,
+        date_of_birth,
         department_id,
         designation,
         mobile_number,
@@ -287,10 +290,11 @@ exports.addEmployeeWithDevice = async (req, res) => {
         emp_code,
         joining_date
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       RETURNING *`,
       [
         cleaned.employee_name,
+        date_of_birth,
         Number(department_id),
         typeof designation === "string" ? designation.trim() || null : null,
         cleaned.mobile_number,
@@ -431,6 +435,7 @@ exports.editEmployeeWithDevice = async (req, res) => {
   const { employee_id } = req.params;
   const {
     employee_name,
+    date_of_birth,
     department_id,
     designation,
     joining_date,
@@ -465,6 +470,7 @@ exports.editEmployeeWithDevice = async (req, res) => {
 
   const requiredFields = {
     employee_name,
+    date_of_birth,
     department_id,
     designation,
     joining_date,
@@ -578,6 +584,13 @@ exports.editEmployeeWithDevice = async (req, res) => {
     return res.status(400).json({
       statusCode: 400,
       message: "Valid joining date in YYYY-MM-DD format is required",
+    });
+  }
+
+  if (!isValidDate(date_of_birth)) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Valid date of birth in YYYY-MM-DD format is required",
     });
   }
 
@@ -715,19 +728,21 @@ exports.editEmployeeWithDevice = async (req, res) => {
     }
 
     const updatedEmployeeResult = await client.query(
-      `UPDATE tbl_employee
-       SET employee_name = $1,
-           department_id = $2,
-           designation = $3,
-           joining_date = $4,
-           mobile_number = $5,
-           status = $6,
-           email = $7,
-           emp_code = $8
-       WHERE employee_id = $9
-       RETURNING *`,
+      ` UPDATE tbl_employee
+        SET employee_name = $1,
+          date_of_birth = $2,
+          department_id = $3,
+          designation = $4,
+          joining_date = $5,
+          mobile_number = $6,
+          status = $7,
+          email = $8,
+          emp_code = $9
+      WHERE employee_id = $10
+      RETURNING *`,
       [
         cleaned.employee_name,
+        date_of_birth,
         Number(department_id),
         cleaned.designation,
         joining_date,
@@ -1223,5 +1238,249 @@ exports.getEmployeeDashboardCounts = async (req, res) => {
   } catch (error) {
     console.error("Get Employee Dashboard Counts Error:", error);
     return res.status(500).json({ statusCode: 500, message: "Internal server error", error: error.message });
+  }
+};
+
+exports.getEmployeeSalaryDetailsByMonth = async (req, res) => {
+  const { month } = req.query; // format: YYYY-MM, e.g. 2026-10
+
+  try {
+    if (
+      typeof month !== "string" ||
+      !/^\d{4}-(0[1-9]|1[0-2])$/.test(month.trim())
+    ) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: "Valid month is required in YYYY-MM format",
+      });
+    }
+
+    const salaryMonth = `${month.trim()}-01`;
+
+    const result = await pool.query(
+      `WITH working_dates AS (
+         SELECT d.day::date AS work_date
+         FROM generate_series(
+                $1::date,
+                ($1::date + INTERVAL '1 month - 1 day')::date,
+                INTERVAL '1 day'
+              ) AS d(day)
+         WHERE EXTRACT(ISODOW FROM d.day) <> 7          -- Sunday off
+           AND NOT EXISTS (
+               SELECT 1
+               FROM tbl_event ev
+               WHERE ev.event_date = d.day::date
+                 AND LOWER(TRIM(ev.event_type)) = 'holiday'
+           )
+       ),
+       month_working_days AS (
+         SELECT COUNT(*)::int AS total_working_days
+         FROM working_dates
+       ),
+       attendance_summary AS (
+         SELECT a.employee_id,
+                SUM(
+                  CASE
+                    WHEN LOWER(TRIM(a.status)) = 'present' THEN 1
+                    WHEN LOWER(TRIM(a.status)) IN ('half day', 'half-day', 'halfday') THEN 0.5
+                    ELSE 0
+                  END
+                ) AS present_days
+         FROM tbl_daily_attendance a
+         JOIN working_dates w
+           ON w.work_date = a.attendance_date
+         GROUP BY a.employee_id
+       )
+       SELECT e.employee_id,
+              e.employee_name,
+              e.emp_code,
+              d.department_name,
+              sp.payment_id,
+              TO_CHAR($1::date, 'YYYY-MM') AS salary_month,
+              COALESCE(sp.working_days, wd.total_working_days) AS working_days,
+              COALESCE(sp.days_present, att.present_days, 0) AS days_present,
+              sp.gross_amount,
+              sp.deductions,
+              sp.net_amount,
+              COALESCE(sp.status, 'PENDING') AS salary_status,
+              sp.paid_on
+       FROM tbl_employee e
+       CROSS JOIN month_working_days wd
+       LEFT JOIN tbl_salary_payment sp
+              ON sp.employee_id = e.employee_id
+             AND sp.salary_month = $1::date
+       LEFT JOIN attendance_summary att
+              ON att.employee_id = e.employee_id
+       LEFT JOIN tbl_department d
+              ON d.department_id = e.department_id
+       WHERE e.status = 'Active'
+       ORDER BY e.employee_id`,
+      [salaryMonth]
+    );
+
+    const summary = result.rows.reduce(
+      (acc, row) => {
+        acc.total_employees += 1;
+        if (row.salary_status === "PAID") acc.paid += 1;
+        else if (row.salary_status === "PENDING") acc.pending += 1;
+        else if (row.salary_status === "HOLD") acc.hold += 1;
+        return acc;
+      },
+      { total_employees: 0, paid: 0, pending: 0, hold: 0 }
+    );
+
+    return res.status(200).json({
+      statusCode: 200,
+      message: "Employee salary details fetched successfully",
+      month: month.trim(),
+      total_working_days: result.rows[0]?.working_days ?? null,
+      summary,
+      data: result.rows,
+    });
+  } catch (error) {
+    console.error("Get Employee Salary Details By Month Error:", error);
+
+    return res.status(500).json({
+      statusCode: 500,
+      message: "Internal server error",
+    });
+  }
+};
+
+exports.creditEmployeeSalary = async (req, res) => {
+  const { employee_id } = req.params;
+  const { month } = req.body; // format: YYYY-MM, e.g. 2026-10
+
+  try {
+    if (!/^[1-9]\d*$/.test(employee_id)) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: "Valid employee ID is required",
+      });
+    }
+
+    if (
+      typeof month !== "string" ||
+      !/^\d{4}-(0[1-9]|1[0-2])$/.test(month.trim())
+    ) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: "Valid month is required in YYYY-MM format",
+      });
+    }
+
+    const salaryMonth = `${month.trim()}-01`;
+
+    const employee = await pool.query(
+      `SELECT employee_id
+       FROM tbl_employee
+       WHERE employee_id = $1
+         AND status = 'Active'`,
+      [Number(employee_id)]
+    );
+
+    if (employee.rowCount === 0) {
+      return res.status(404).json({
+        statusCode: 404,
+        message: `Active employee with ID ${employee_id} not found`,
+      });
+    }
+
+    const result = await pool.query(
+      `WITH working_dates AS (
+         SELECT d.day::date AS work_date
+         FROM generate_series(
+                $1::date,
+                ($1::date + INTERVAL '1 month - 1 day')::date,
+                INTERVAL '1 day'
+              ) AS d(day)
+         WHERE EXTRACT(ISODOW FROM d.day) <> 7
+           AND NOT EXISTS (
+               SELECT 1
+               FROM tbl_event ev
+               WHERE ev.event_date = d.day::date
+                 AND LOWER(TRIM(ev.event_type)) = 'holiday'
+           )
+       ),
+       month_working_days AS (
+         SELECT COUNT(*)::numeric AS total_working_days
+         FROM working_dates
+       ),
+       attendance_summary AS (
+         SELECT COALESCE(SUM(
+                  CASE
+                    WHEN LOWER(TRIM(a.status)) = 'present' THEN 1
+                    WHEN LOWER(TRIM(a.status)) IN ('half day', 'half-day', 'halfday') THEN 0.5
+                    ELSE 0
+                  END
+                ), 0) AS present_days
+         FROM tbl_daily_attendance a
+         JOIN working_dates w ON w.work_date = a.attendance_date
+         WHERE a.employee_id = $2
+       ),
+       calc AS (
+         SELECT e.employee_id,
+                wd.total_working_days AS working_days,
+                att.present_days AS days_present,
+                e.gross_salary AS gross_amount,
+                ROUND(
+                  e.gross_salary / NULLIF(wd.total_working_days, 0)
+                  * GREATEST(wd.total_working_days - att.present_days, 0),
+                  2
+                ) AS deductions
+         FROM tbl_employee e
+         CROSS JOIN month_working_days wd
+         CROSS JOIN attendance_summary att
+         WHERE e.employee_id = $2
+       )
+       INSERT INTO tbl_salary_payment
+         (employee_id, salary_month, working_days, days_present,
+          gross_amount, deductions, net_amount, status, paid_on)
+       SELECT employee_id,
+              $1::date,
+              working_days,
+              days_present,
+              gross_amount,
+              COALESCE(deductions, 0),
+              gross_amount - COALESCE(deductions, 0),
+              'PAID',
+              CURRENT_DATE
+       FROM calc
+       ON CONFLICT (employee_id, salary_month)
+       DO UPDATE SET status = 'PAID',
+                     paid_on = CURRENT_DATE
+         WHERE tbl_salary_payment.status <> 'PAID'
+       RETURNING payment_id,
+                 employee_id,
+                 TO_CHAR(salary_month, 'YYYY-MM-DD') AS salary_month,
+                 working_days,
+                 days_present,
+                 gross_amount,
+                 deductions,
+                 net_amount,
+                 status,
+                 TO_CHAR(paid_on, 'YYYY-MM-DD') AS paid_on`,
+      [salaryMonth, Number(employee_id)]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(409).json({
+        statusCode: 409,
+        message: `Salary for ${month.trim()} is already paid for employee ID ${employee_id}`,
+      });
+    }
+
+    return res.status(200).json({
+      statusCode: 200,
+      message: "Employee salary credited successfully",
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Credit Employee Salary Error:", error);
+
+    return res.status(500).json({
+      statusCode: 500,
+      message: "Internal server error",
+    });
   }
 };
