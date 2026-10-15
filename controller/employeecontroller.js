@@ -1241,8 +1241,9 @@ exports.getEmployeeDashboardCounts = async (req, res) => {
   }
 };
 
+
 exports.getEmployeeSalaryDetailsByMonth = async (req, res) => {
-  const { month } = req.query; // format: YYYY-MM, e.g. 2026-10
+  const { month } = req.query;
 
   try {
     if (
@@ -1255,86 +1256,256 @@ exports.getEmployeeSalaryDetailsByMonth = async (req, res) => {
       });
     }
 
-    const salaryMonth = `${month.trim()}-01`;
+    const selectedMonth = month.trim();
+    const salaryMonth = `${selectedMonth}-01`;
 
     const result = await pool.query(
       `WITH working_dates AS (
-         SELECT d.day::date AS work_date
-         FROM generate_series(
-                $1::date,
-                ($1::date + INTERVAL '1 month - 1 day')::date,
-                INTERVAL '1 day'
-              ) AS d(day)
-         WHERE EXTRACT(ISODOW FROM d.day) <> 7          -- Sunday off
-           AND NOT EXISTS (
-               SELECT 1
-               FROM tbl_event ev
-               WHERE ev.event_date = d.day::date
-                 AND LOWER(TRIM(ev.event_type)) = 'holiday'
-           )
-       ),
-       month_working_days AS (
-         SELECT COUNT(*)::int AS total_working_days
-         FROM working_dates
-       ),
-       attendance_summary AS (
-         SELECT a.employee_id,
-                SUM(
-                  CASE
-                    WHEN LOWER(TRIM(a.status)) = 'present' THEN 1
-                    WHEN LOWER(TRIM(a.status)) IN ('half day', 'half-day', 'halfday') THEN 0.5
-                    ELSE 0
-                  END
-                ) AS present_days
-         FROM tbl_daily_attendance a
-         JOIN working_dates w
-           ON w.work_date = a.attendance_date
-         GROUP BY a.employee_id
-       )
-       SELECT e.employee_id,
-              e.employee_name,
-              e.emp_code,
-              d.department_name,
-              sp.payment_id,
-              TO_CHAR($1::date, 'YYYY-MM') AS salary_month,
-              COALESCE(sp.working_days, wd.total_working_days) AS working_days,
-              COALESCE(sp.days_present, att.present_days, 0) AS days_present,
-              sp.gross_amount,
-              sp.deductions,
-              sp.net_amount,
-              COALESCE(sp.status, 'PENDING') AS salary_status,
-              sp.paid_on
-       FROM tbl_employee e
-       CROSS JOIN month_working_days wd
-       LEFT JOIN tbl_salary_payment sp
-              ON sp.employee_id = e.employee_id
-             AND sp.salary_month = $1::date
-       LEFT JOIN attendance_summary att
-              ON att.employee_id = e.employee_id
-       LEFT JOIN tbl_department d
-              ON d.department_id = e.department_id
-       WHERE e.status = 'Active'
-       ORDER BY e.employee_id`,
+        SELECT d.day::date AS work_date
+        FROM generate_series(
+          $1::date,
+          ($1::date + INTERVAL '1 month - 1 day')::date,
+          INTERVAL '1 day'
+        ) AS d(day)
+        WHERE EXTRACT(ISODOW FROM d.day) <> 7
+          AND NOT EXISTS (
+            SELECT 1
+            FROM tbl_event ev
+            WHERE ev.event_date = d.day::date
+              AND LOWER(TRIM(ev.event_type)) = 'holiday'
+          )
+      ),
+      month_working_days AS (
+        SELECT COUNT(*)::int AS working_days
+        FROM working_dates
+      ),
+      attendance_per_day AS (
+        SELECT
+          a.employee_id,
+          a.attendance_date,
+          MAX(
+            CASE
+              WHEN LOWER(TRIM(a.status)) IN ('present', 'late') THEN 1
+              ELSE 0
+            END
+          ) AS day_value,
+          BOOL_OR(
+            COALESCE(a.is_late, FALSE)
+            OR LOWER(TRIM(a.status)) = 'late'
+          ) AS is_late_day
+        FROM tbl_daily_attendance a
+        INNER JOIN working_dates w
+          ON w.work_date = a.attendance_date
+        GROUP BY a.employee_id, a.attendance_date
+      ),
+      attendance_summary AS (
+        SELECT
+          employee_id,
+          SUM(day_value)::numeric AS days_present,
+          COUNT(*) FILTER (WHERE is_late_day)::int AS late_days
+        FROM attendance_per_day
+        GROUP BY employee_id
+      ),
+      leave_per_day AS (
+        SELECT
+          l.employee_id,
+          w.work_date,
+          MAX(
+            CASE
+              WHEN l.from_date = l.to_date
+                AND l.duration ~ '^[0-9]+([.][0-9]+)?$'
+              THEN LEAST(l.duration::numeric, 1)
+              ELSE 1
+            END
+          ) AS day_value
+        FROM tbl_leaves l
+        INNER JOIN working_dates w
+          ON w.work_date BETWEEN l.from_date AND l.to_date
+        WHERE LOWER(TRIM(l.status)) = 'approved'
+        GROUP BY l.employee_id, w.work_date
+      ),
+      leave_summary AS (
+        SELECT
+          lpd.employee_id,
+          SUM(
+            GREATEST(
+              LEAST(
+                lpd.day_value,
+                1 - COALESCE(apd.day_value, 0)
+              ),
+              0
+            )
+          ) AS leaves_taken
+        FROM leave_per_day lpd
+        LEFT JOIN attendance_per_day apd
+          ON apd.employee_id = lpd.employee_id
+          AND apd.attendance_date = lpd.work_date
+        GROUP BY lpd.employee_id
+      ),
+      employee_salary AS (
+        SELECT DISTINCT ON (es.employee_id)
+          es.employee_id,
+          es.basic_salary,
+          es.hra,
+          es.other_allowances,
+          es.travel_allowance,
+          es.pf_deduction,
+          es.professional_tax,
+          es.other_deductions,
+          es.gross_salary,
+          es.total_deductions,
+          es.net_salary,
+          es.annual_ctc
+        FROM tbl_employee_salary es
+        WHERE es.effective_date < (
+          $1::date + INTERVAL '1 month'
+        )
+        ORDER BY
+          es.employee_id,
+          es.effective_date DESC,
+          es.salary_id DESC
+      )
+      SELECT
+        e.employee_id,
+        e.employee_name,
+        e.emp_code,
+        d.department_name,
+        sp.payment_id,
+        COALESCE(wd.working_days, 0)::int AS working_days,
+        COALESCE(att.days_present, 0)::float AS present_days,
+        COALESCE(ls.leaves_taken, 0)::float AS leaves_taken,
+        GREATEST(
+          12 - COALESCE(ls.leaves_taken, 0),
+          0
+        )::float AS balance_left,
+        GREATEST(
+          COALESCE(wd.working_days, 0)
+          - COALESCE(att.days_present, 0)
+          - COALESCE(ls.leaves_taken, 0),
+          0
+        )::float AS lop_days,
+        COALESCE(
+          NULLIF(es.annual_ctc, 0),
+          es.gross_salary * 12,
+          0
+        )::float AS annual_ctc,
+        COALESCE(
+          NULLIF(es.annual_ctc, 0) / 12,
+          es.gross_salary,
+          0
+        )::float AS monthly_ctc,
+        COALESCE(
+          sp.deductions,
+          es.total_deductions,
+          0
+        )::float AS deduction,
+        COALESCE(
+          sp.net_amount,
+          es.net_salary,
+          0
+        )::float AS net_amount,
+        UPPER(TRIM(COALESCE(sp.status, 'PENDING'))) AS salary_status,
+        TO_CHAR(sp.paid_on, 'YYYY-MM-DD') AS paid_on
+      FROM tbl_employee e
+      CROSS JOIN month_working_days wd
+      LEFT JOIN tbl_salary_payment sp
+        ON sp.employee_id = e.employee_id
+        AND sp.salary_month = $1::date
+      LEFT JOIN employee_salary es
+        ON es.employee_id = e.employee_id
+      LEFT JOIN attendance_summary att
+        ON att.employee_id = e.employee_id
+      LEFT JOIN leave_summary ls
+        ON ls.employee_id = e.employee_id
+      LEFT JOIN tbl_department d
+        ON d.department_id = e.department_id
+      WHERE e.status = 'Active'
+      ORDER BY e.employee_id`,
+      [salaryMonth]
+    );
+
+    const statisticsResult = await pool.query(
+      `SELECT
+        COUNT(*)::int AS total_employees,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN UPPER(TRIM(COALESCE(sp.status, 'PENDING'))) = 'PAID'
+              THEN COALESCE(sp.net_amount, es.net_salary, 0)
+              ELSE 0
+            END
+          ),
+          0
+        )::numeric AS net_payroll,
+        COALESCE(
+          SUM(
+            CASE
+              WHEN UPPER(TRIM(COALESCE(sp.status, 'PENDING'))) = 'PAID'
+              THEN COALESCE(sp.deductions, es.total_deductions, 0)
+              ELSE 0
+            END
+          ),
+          0
+        )::numeric AS lop_deductions,
+        COUNT(*) FILTER (
+          WHERE UPPER(TRIM(COALESCE(sp.status, 'PENDING'))) = 'PENDING'
+        )::int AS pending_payments
+      FROM tbl_employee e
+      LEFT JOIN tbl_salary_payment sp
+        ON sp.employee_id = e.employee_id
+        AND sp.salary_month = $1::date
+      LEFT JOIN LATERAL (
+        SELECT
+          es.net_salary,
+          es.total_deductions
+        FROM tbl_employee_salary es
+        WHERE es.employee_id = e.employee_id
+          AND es.effective_date < (
+            $1::date + INTERVAL '1 month'
+          )
+        ORDER BY es.effective_date DESC, es.salary_id DESC
+        LIMIT 1
+      ) es ON TRUE
+      WHERE e.status = 'Active'`,
       [salaryMonth]
     );
 
     const summary = result.rows.reduce(
       (acc, row) => {
         acc.total_employees += 1;
-        if (row.salary_status === "PAID") acc.paid += 1;
-        else if (row.salary_status === "PENDING") acc.pending += 1;
-        else if (row.salary_status === "HOLD") acc.hold += 1;
+
+        if (row.salary_status === "PAID") {
+          acc.paid += 1;
+        } else if (row.salary_status === "PENDING") {
+          acc.pending += 1;
+        } else if (row.salary_status === "HOLD") {
+          acc.hold += 1;
+        }
+
         return acc;
       },
-      { total_employees: 0, paid: 0, pending: 0, hold: 0 }
+      {
+        total_employees: 0,
+        paid: 0,
+        pending: 0,
+        hold: 0,
+      }
     );
+
+    const statistics = statisticsResult.rows[0];
 
     return res.status(200).json({
       statusCode: 200,
       message: "Employee salary details fetched successfully",
-      month: month.trim(),
-      total_working_days: result.rows[0]?.working_days ?? null,
+      month: selectedMonth,
+      working_days: result.rows[0]?.working_days ?? 0,
       summary,
+      statistics: {
+        total_employees: Number(statistics.total_employees),
+        net_payroll: Number(statistics.net_payroll),
+        lop_deductions: Number(statistics.lop_deductions),
+        pending_payments: Number(statistics.pending_payments),
+      },
       data: result.rows,
     });
   } catch (error) {
@@ -1387,86 +1558,86 @@ exports.creditEmployeeSalary = async (req, res) => {
     }
 
     const result = await pool.query(
-      `WITH working_dates AS (
-         SELECT d.day::date AS work_date
+      `WITH working_dates AS(
+                                SELECT d.day:: date AS work_date
          FROM generate_series(
-                $1::date,
-                ($1::date + INTERVAL '1 month - 1 day')::date,
-                INTERVAL '1 day'
-              ) AS d(day)
+                                  $1:: date,
+                                  ($1:: date + INTERVAL '1 month - 1 day'):: date,
+                                INTERVAL '1 day'
+                              ) AS d(day)
          WHERE EXTRACT(ISODOW FROM d.day) <> 7
-           AND NOT EXISTS (
-               SELECT 1
+           AND NOT EXISTS(
+                                SELECT 1
                FROM tbl_event ev
-               WHERE ev.event_date = d.day::date
+               WHERE ev.event_date = d.day:: date
                  AND LOWER(TRIM(ev.event_type)) = 'holiday'
-           )
+                              )
        ),
-       month_working_days AS (
-         SELECT COUNT(*)::numeric AS total_working_days
+       month_working_days AS(
+                                SELECT COUNT(*):: numeric AS total_working_days
          FROM working_dates
-       ),
-       attendance_summary AS (
-         SELECT COALESCE(SUM(
-                  CASE
+                              ),
+  attendance_summary AS(
+    SELECT COALESCE(SUM(
+      CASE
                     WHEN LOWER(TRIM(a.status)) = 'present' THEN 1
-                    WHEN LOWER(TRIM(a.status)) IN ('half day', 'half-day', 'halfday') THEN 0.5
+                    WHEN LOWER(TRIM(a.status)) IN('half day', 'half-day', 'halfday') THEN 0.5
                     ELSE 0
                   END
-                ), 0) AS present_days
+    ), 0) AS present_days
          FROM tbl_daily_attendance a
          JOIN working_dates w ON w.work_date = a.attendance_date
          WHERE a.employee_id = $2
-       ),
-       calc AS (
-         SELECT e.employee_id,
-                wd.total_working_days AS working_days,
-                att.present_days AS days_present,
-                e.gross_salary AS gross_amount,
-                ROUND(
-                  e.gross_salary / NULLIF(wd.total_working_days, 0)
-                  * GREATEST(wd.total_working_days - att.present_days, 0),
-                  2
-                ) AS deductions
+  ),
+    calc AS(
+      SELECT e.employee_id,
+      wd.total_working_days AS working_days,
+      att.present_days AS days_present,
+      e.gross_salary AS gross_amount,
+      ROUND(
+        e.gross_salary / NULLIF(wd.total_working_days, 0)
+        * GREATEST(wd.total_working_days - att.present_days, 0),
+        2
+      ) AS deductions
          FROM tbl_employee e
          CROSS JOIN month_working_days wd
          CROSS JOIN attendance_summary att
          WHERE e.employee_id = $2
-       )
+    )
        INSERT INTO tbl_salary_payment
-         (employee_id, salary_month, working_days, days_present,
-          gross_amount, deductions, net_amount, status, paid_on)
+  (employee_id, salary_month, working_days, days_present,
+    gross_amount, deductions, net_amount, status, paid_on)
        SELECT employee_id,
-              $1::date,
-              working_days,
-              days_present,
-              gross_amount,
-              COALESCE(deductions, 0),
-              gross_amount - COALESCE(deductions, 0),
-              'PAID',
-              CURRENT_DATE
+  $1:: date,
+    working_days,
+    days_present,
+    gross_amount,
+    COALESCE(deductions, 0),
+    gross_amount - COALESCE(deductions, 0),
+    'PAID',
+    CURRENT_DATE
        FROM calc
-       ON CONFLICT (employee_id, salary_month)
+       ON CONFLICT(employee_id, salary_month)
        DO UPDATE SET status = 'PAID',
-                     paid_on = CURRENT_DATE
+  paid_on = CURRENT_DATE
          WHERE tbl_salary_payment.status <> 'PAID'
        RETURNING payment_id,
-                 employee_id,
-                 TO_CHAR(salary_month, 'YYYY-MM-DD') AS salary_month,
-                 working_days,
-                 days_present,
-                 gross_amount,
-                 deductions,
-                 net_amount,
-                 status,
-                 TO_CHAR(paid_on, 'YYYY-MM-DD') AS paid_on`,
+  employee_id,
+  TO_CHAR(salary_month, 'YYYY-MM-DD') AS salary_month,
+    working_days,
+    days_present,
+    gross_amount,
+    deductions,
+    net_amount,
+    status,
+    TO_CHAR(paid_on, 'YYYY-MM-DD') AS paid_on`,
       [salaryMonth, Number(employee_id)]
     );
 
     if (result.rowCount === 0) {
       return res.status(409).json({
         statusCode: 409,
-        message: `Salary for ${month.trim()} is already paid for employee ID ${employee_id}`,
+        message: `Salary for ${month.trim()} is already paid for employee ID ${employee_id} `,
       });
     }
 
