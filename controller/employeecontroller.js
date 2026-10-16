@@ -1235,6 +1235,28 @@ exports.getEmployeeDashboardCounts = async (req, res) => {
   }
 };
 
+exports.getEmployeeIdAndName = async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT employee_id, employee_name
+       FROM tbl_employee
+       ORDER BY employee_id DESC`
+    );
+
+    return res.status(200).json({
+      statusCode: 200,
+      message: "Employee list fetched successfully",
+      data: result.rows,
+    });
+  } catch (error) {
+    console.error("Get Employee ID and Name Error:", error);
+
+    return res.status(500).json({
+      statusCode: 500,
+      message: "Internal server error",
+    });
+  }
+};
 
 exports.getEmployeeSalaryDetailsByMonth = async (req, res) => {
   const { month } = req.query;

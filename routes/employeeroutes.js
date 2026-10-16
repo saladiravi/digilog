@@ -11,6 +11,7 @@ router.post("/:employee_id/salary/credit", employeeController.creditEmployeeSala
 router.put('/edit-employee-with-device/:employee_id', employeeController.editEmployeeWithDevice);
 router.delete('/delete-employee-with-device/:employee_id', employeeController.deleteEmployeeWithDevice);
 router.get('/getEmployees', employeeController.getEmployeeDashboardCounts);
+router.get("/list", employeeController.getEmployeeIdAndName);
 router.get("/salary-details", employeeController.getEmployeeSalaryDetailsByMonth);
 
 router.get("/salaries/details", employeeController.getEmployeeSalaryDetails);
