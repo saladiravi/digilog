@@ -385,6 +385,7 @@ exports.getMonthlyAttendanceByEmployee = async (req, res) => {
          e.joining_date,
          e.date_of_birth,
          e.device_user_id,
+         e.relieving_date,
          CASE
            WHEN e.enrolled = true THEN 'Registered'
            ELSE 'Not Registered'

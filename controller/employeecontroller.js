@@ -336,6 +336,9 @@ exports.addEmployeeWithDevice = async (req, res) => {
     );
 
     const insertedEmployee = empResult.rows[0];
+
+    const { password, ...employeeWithoutPassword } = insertedEmployee;
+
     const employeeId = insertedEmployee.employee_id;
 
     await client.query(
@@ -417,7 +420,7 @@ exports.addEmployeeWithDevice = async (req, res) => {
       message:
         "Employee, salary and bank details saved. Device synchronization queued.",
       data: {
-        employee: insertedEmployee,
+        employee: employeeWithoutPassword,
         salary: {
           basic_salary: Number(salaryFields.basic_salary),
           hra: Number(salaryFields.hra),
@@ -1274,7 +1277,7 @@ exports.getEmployeeDashboardCounts = async (req, res) => {
     const employeeQuery = `
       SELECT
         e.employee_id, e.employee_name, e.department_id, d.department_name,
-        e.designation, e.mobile_number, e.status, e.joining_date,e.device_user_id,e.email,e.emp_code,
+        e.designation, e.mobile_number, e.status, e.joining_date,e.device_user_id,e.email,e.emp_code, e.relieving_date,
         CASE WHEN e.enrolled = true THEN 'Registered' ELSE 'Not Registered' END AS fingerprint_status
       FROM tbl_employee e
       LEFT JOIN tbl_department d ON e.department_id = d.department_id
@@ -1635,14 +1638,18 @@ exports.getEmployeesSalaryDetailsByMonth = async (req, res) => {
 };
 
 
+
+
 exports.creditEmployeeSalary = async (req, res) => {
   const { employee_id } = req.params;
   const {
     salary_month,
     working_days,
     days_present,
+    lop_days,
     gross_amount,
     deductions = 0,
+    hr_reason = null,
     paid_on = new Date().toISOString().slice(0, 10),
   } = req.body;
 
@@ -1669,14 +1676,19 @@ exports.creditEmployeeSalary = async (req, res) => {
     if (
       working_days == null ||
       days_present == null ||
+      lop_days == null ||
       gross_amount == null ||
-      !Number.isFinite(Number(working_days)) ||
-      !Number.isFinite(Number(days_present)) ||
+      !Number.isInteger(Number(working_days)) ||
+      !Number.isInteger(Number(days_present)) ||
+      !Number.isInteger(Number(lop_days)) ||
       !Number.isFinite(Number(gross_amount)) ||
       !Number.isFinite(Number(deductions)) ||
-      Number(working_days) < 0 ||
+      Number(working_days) <= 0 ||
       Number(days_present) < 0 ||
+      Number(lop_days) < 0 ||
       Number(days_present) > Number(working_days) ||
+      Number(lop_days) > Number(working_days) ||
+      Number(days_present) + Number(lop_days) > Number(working_days) ||
       Number(gross_amount) < 0 ||
       Number(deductions) < 0 ||
       Number(deductions) > Number(gross_amount)
@@ -1684,16 +1696,42 @@ exports.creditEmployeeSalary = async (req, res) => {
       return res.status(400).json({
         success: false,
         statusCode: 400,
-        message: "Valid salary and attendance details are required",
+        message: "Valid salary, attendance and LOP details are required",
+      });
+    }
+
+    if (
+      hr_reason !== null &&
+      (typeof hr_reason !== "string" || hr_reason.trim().length > 500)
+    ) {
+      return res.status(400).json({
+        success: false,
+        statusCode: 400,
+        message: "HR reason must be a string with a maximum of 500 characters",
+      });
+    }
+
+    if (
+      !paid_on ||
+      !/^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(paid_on) ||
+      !Number.isFinite(Date.parse(`${paid_on}T00:00:00Z`)) ||
+      new Date(`${paid_on}T00:00:00Z`).toISOString().slice(0, 10) !== paid_on
+    ) {
+      return res.status(400).json({
+        success: false,
+        statusCode: 400,
+        message: "Valid paid date in YYYY-MM-DD format is required",
       });
     }
 
     const employeeId = Number(employee_id);
     const workingDays = Number(working_days);
     const daysPresent = Number(days_present);
+    const lopDays = Number(lop_days);
     const grossAmount = Number(Number(gross_amount).toFixed(2));
     const deductionAmount = Number(Number(deductions).toFixed(2));
     const netAmount = Number((grossAmount - deductionAmount).toFixed(2));
+    const hrReason = hr_reason === null ? null : hr_reason.trim() || null;
 
     const employeeResult = await pool.query(
       `SELECT employee_id
@@ -1710,28 +1748,59 @@ exports.creditEmployeeSalary = async (req, res) => {
       });
     }
 
+    const salaryResult = await pool.query(
+      `SELECT annual_ctc
+       FROM tbl_employee_salary
+       WHERE employee_id = $1
+         AND effective_date <= $2::date
+       ORDER BY effective_date DESC
+       LIMIT 1`,
+      [employeeId, salary_month]
+    );
+
+    if (
+      salaryResult.rowCount === 0 ||
+      salaryResult.rows[0].annual_ctc == null
+    ) {
+      return res.status(400).json({
+        success: false,
+        statusCode: 400,
+        message: `Annual CTC not found for employee ID ${employeeId} for the selected salary month`,
+      });
+    }
+
+    const annualCtc = Number(salaryResult.rows[0].annual_ctc);
+
     const result = await pool.query(
-      `INSERT INTO tbl_salary_payment(
+      `INSERT INTO tbl_salary_payment (
         employee_id,
         salary_month,
         working_days,
         days_present,
+        lop_days,
+        annual_ctc,
         gross_amount,
         deductions,
         net_amount,
+        hr_reason,
         status,
         paid_on
       )
-      VALUES($1, $2:: date, $3, $4, $5, $6, $7, 'PAID', $8)
-      RETURNING * `,
+      VALUES (
+        $1, $2::date, $3, $4, $5, $6, $7, $8, $9, $10, 'PAID', $11
+      )
+      RETURNING *`,
       [
         employeeId,
         salary_month,
         workingDays,
         daysPresent,
+        lopDays,
+        annualCtc,
         grossAmount,
         deductionAmount,
         netAmount,
+        hrReason,
         paid_on,
       ]
     );
@@ -1749,7 +1818,7 @@ exports.creditEmployeeSalary = async (req, res) => {
       return res.status(409).json({
         success: false,
         statusCode: 409,
-        message: `Salary payment already exists for employee ID ${req.params.employee_id} for the selected month`,
+        message: `Salary payment already exists for employee ID ${employee_id} for the selected month`,
       });
     }
 
@@ -1760,6 +1829,8 @@ exports.creditEmployeeSalary = async (req, res) => {
     });
   }
 };
+
+
 
 
 const yearlyLeaveEntitlement = (selectedMonth) => {
@@ -1994,6 +2065,81 @@ exports.getEmployeeSalaryDetailsByMonth = async (req, res) => {
     });
   } catch (error) {
     console.error("Error fetching employee salary details:", error);
+
+    return res.status(500).json({
+      success: false,
+      statusCode: 500,
+      message: "Internal server error",
+    });
+  }
+};
+
+
+
+exports.getEmployeeSalaryPayments = async (req, res) => {
+  const { employee_id } = req.params;
+
+  try {
+    if (!/^[1-9]\d*$/.test(employee_id || "")) {
+      return res.status(400).json({
+        success: false,
+        statusCode: 400,
+        message: "Valid employee ID is required",
+      });
+    }
+
+    const employeeId = Number(employee_id);
+
+    const employeeResult = await pool.query(
+      `SELECT employee_id, employee_name, emp_code
+       FROM tbl_employee
+       WHERE employee_id = $1`,
+      [employeeId]
+    );
+
+    if (employeeResult.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        statusCode: 404,
+        message: `Employee with ID ${employeeId} not found`,
+      });
+    }
+
+    const result = await pool.query(
+      `SELECT
+         payment_id,
+         employee_id,
+         TO_CHAR(salary_month, 'YYYY-MM') AS salary_month,
+         working_days,
+         days_present,
+         leaves_taken,
+         available_leaves,
+         lop_days,
+         annual_ctc,
+         gross_amount,
+         deductions,
+         net_amount,
+         status,
+         hr_reason,
+         TO_CHAR(paid_on, 'YYYY-MM-DD') AS paid_on
+       FROM tbl_salary_payment
+       WHERE employee_id = $1
+       ORDER BY salary_month DESC`,
+      [employeeId]
+    );
+
+    return res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: "Employee salary payment details fetched successfully",
+      data: {
+        employee: employeeResult.rows[0],
+        total_payments: result.rowCount,
+        payments: result.rows,
+      },
+    });
+  } catch (error) {
+    console.error("Get Employee Salary Payments Error:", error);
 
     return res.status(500).json({
       success: false,
