@@ -15,7 +15,6 @@ router.get("/salary-details", employeeController.getEmployeeSalaryDetailsByMonth
 
 router.get("/salaries/details", employeeController.getEmployeeSalaryDetails);
 router.get("/:employee_id", employeeController.getEmployeeById);
-router.put("/:employee_id/bank-details", employeeController.updateEmployeeBankDetails);
-
+router.put("/:employee_id/financial-details", employeeController.updateEmployeeBankDetails);
 
 module.exports = router;

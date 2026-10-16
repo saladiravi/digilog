@@ -818,7 +818,17 @@ exports.updateEmployeeBankDetails = async (req, res) => {
     account_number,
     ifsc_code,
     branch_name,
-  } = req.body;
+    basic_salary,
+    hra,
+    other_allowances,
+    travel_allowance,
+    pf_deduction,
+    professional_tax,
+    other_deductions,
+    effective_date,
+  } = req.body || {};
+
+  let client;
 
   try {
     if (!/^[1-9]\d*$/.test(employee_id)) {
@@ -844,6 +854,13 @@ exports.updateEmployeeBankDetails = async (req, res) => {
       }
     }
 
+    if (!/^[A-Za-z]{4}0[A-Za-z0-9]{6}$/.test(ifsc_code.trim())) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: "Valid IFSC code is required",
+      });
+    }
+
     if (
       branch_name !== undefined &&
       branch_name !== null &&
@@ -855,37 +872,101 @@ exports.updateEmployeeBankDetails = async (req, res) => {
       });
     }
 
-    if (!/^[A-Za-z]{4}0[A-Za-z0-9]{6}$/.test(ifsc_code.trim())) {
+    const salaryFields = {
+      basic_salary,
+      hra,
+      other_allowances,
+      travel_allowance,
+      pf_deduction,
+      professional_tax,
+      other_deductions,
+    };
+
+    for (const [field, value] of Object.entries(salaryFields)) {
+      if (
+        value === undefined ||
+        value === null ||
+        value === "" ||
+        !Number.isFinite(Number(value)) ||
+        Number(value) < 0
+      ) {
+        return res.status(400).json({
+          statusCode: 400,
+          message: `Valid ${field} is required`,
+        });
+      }
+    }
+
+    if (
+      typeof effective_date !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(effective_date) ||
+      !Number.isFinite(Date.parse(effective_date)) ||
+      new Date(effective_date).toISOString().slice(0, 10) !== effective_date
+    ) {
       return res.status(400).json({
         statusCode: 400,
-        message: "Valid IFSC code is required",
+        message: "Valid effective date in YYYY-MM-DD format is required",
       });
     }
 
-    const employee = await pool.query(
+    const salary = Object.fromEntries(
+      Object.entries(salaryFields).map(([field, value]) => [
+        field,
+        Number(value),
+      ])
+    );
+
+    const gross_salary =
+      salary.basic_salary +
+      salary.hra +
+      salary.other_allowances +
+      salary.travel_allowance;
+
+    const total_deductions =
+      salary.pf_deduction +
+      salary.professional_tax +
+      salary.other_deductions;
+
+    const net_salary = gross_salary - total_deductions;
+
+    if (net_salary < 0) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: "Total deductions cannot exceed gross salary",
+      });
+    }
+
+    const annual_ctc = gross_salary * 12;
+
+    client = await pool.connect();
+    await client.query("BEGIN");
+
+    const employeeResult = await client.query(
       `SELECT employee_id
        FROM tbl_employee
        WHERE employee_id = $1`,
       [Number(employee_id)]
     );
 
-    if (employee.rowCount === 0) {
+    if (employeeResult.rowCount === 0) {
+      await client.query("ROLLBACK");
+
       return res.status(404).json({
         statusCode: 404,
         message: `Employee with ID ${employee_id} not found`,
       });
     }
 
-    const result = await pool.query(
+    const bankResult = await client.query(
       `UPDATE tbl_employee_bank_details
        SET account_holder_name = $1,
-           bank_name = $2,
-           account_number = $3,
-           ifsc_code = $4,
-           branch_name = $5,
-           updated_at = CURRENT_TIMESTAMP
+  bank_name = $2,
+  account_number = $3,
+  ifsc_code = $4,
+  branch_name = $5,
+  updated_at = CURRENT_TIMESTAMP
        WHERE employee_id = $6
-       RETURNING *`,
+RETURNING * `,
       [
         account_holder_name.trim(),
         bank_name.trim(),
@@ -896,25 +977,88 @@ exports.updateEmployeeBankDetails = async (req, res) => {
       ]
     );
 
-    if (result.rowCount === 0) {
+    if (bankResult.rowCount === 0) {
+      await client.query("ROLLBACK");
+
       return res.status(404).json({
         statusCode: 404,
-        message: `Bank details not found for employee ID ${employee_id}`,
+        message: `Bank details not found for employee ID ${employee_id} `,
       });
     }
 
+    const salaryResult = await client.query(
+      `UPDATE tbl_employee_salary
+      SET basic_salary = $1,
+          hra = $2,
+          other_allowances = $3,
+          travel_allowance = $4,
+          pf_deduction = $5,
+          professional_tax = $6,
+          other_deductions = $7,
+          gross_salary = $8,
+          total_deductions = $9,
+          net_salary = $10,
+          annual_ctc = $11,
+          effective_date = $12
+      WHERE salary_id = (
+        SELECT salary_id
+        FROM tbl_employee_salary
+        WHERE employee_id = $13
+        ORDER BY effective_date DESC, salary_id DESC
+        LIMIT 1
+      )
+      RETURNING *`,
+      [
+        salary.basic_salary,
+        salary.hra,
+        salary.other_allowances,
+        salary.travel_allowance,
+        salary.pf_deduction,
+        salary.professional_tax,
+        salary.other_deductions,
+        gross_salary,
+        total_deductions,
+        net_salary,
+        annual_ctc,
+        effective_date,
+        Number(employee_id),
+      ]
+    );
+
+    if (salaryResult.rowCount === 0) {
+      await client.query("ROLLBACK");
+
+      return res.status(404).json({
+        statusCode: 404,
+        message: `Salary details not found for employee ID ${employee_id} `,
+      });
+    }
+
+    await client.query("COMMIT");
+
     return res.status(200).json({
       statusCode: 200,
-      message: "Employee bank details updated successfully",
-      data: result.rows[0],
+      message: "Employee bank and salary details updated successfully",
+      data: {
+        bank_details: bankResult.rows[0],
+        salary_details: salaryResult.rows[0],
+      },
     });
   } catch (error) {
-    console.error("Update Employee Bank Details Error:", error);
+    if (client) {
+      await client.query("ROLLBACK").catch(() => { });
+    }
+
+    console.error("Update Employee Bank and Salary Details Error:", error);
 
     return res.status(500).json({
       statusCode: 500,
       message: "Internal server error",
     });
+  } finally {
+    if (client) {
+      client.release();
+    }
   }
 };
 
