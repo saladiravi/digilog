@@ -12,9 +12,9 @@ router.put('/edit-employee-with-device/:employee_id', employeeController.editEmp
 router.delete('/delete-employee-with-device/:employee_id', employeeController.deleteEmployeeWithDevice);
 router.get('/getEmployees', employeeController.getEmployeeDashboardCounts);
 router.get("/list", employeeController.getEmployeeIdAndName);
-router.get("/salary-details", employeeController.getEmployeeSalaryDetailsByMonth);
+router.get("/salary-details", employeeController.getEmployeesSalaryDetailsByMonth);
 
-router.get("/salaries/details", employeeController.getEmployeeSalaryDetails);
+router.get("/salaries/details", employeeController.getEmployeeSalaryDetailsByMonth);
 router.get("/:employee_id", employeeController.getEmployeeById);
 router.put("/:employee_id/financial-details", employeeController.updateEmployeeBankDetails);
 
