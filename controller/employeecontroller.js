@@ -1335,6 +1335,7 @@ exports.getEmployeesSalaryDetailsByMonth = async (req, res) => {
       !/^\d{4}-(0[1-9]|1[0-2])$/.test(month.trim())
     ) {
       return res.status(400).json({
+        success: false,
         statusCode: 400,
         message: "Valid month is required in YYYY-MM format",
       });
@@ -1342,13 +1343,17 @@ exports.getEmployeesSalaryDetailsByMonth = async (req, res) => {
 
     const selectedMonth = month.trim();
     const salaryMonth = `${selectedMonth}-01`;
+    const leaveEntitlement = yearlyLeaveEntitlement(selectedMonth);
 
     const result = await pool.query(
       `WITH working_dates AS (
         SELECT d.day::date AS work_date
         FROM generate_series(
           $1::date,
-          ($1::date + INTERVAL '1 month - 1 day')::date,
+          LEAST(
+            ($1::date + INTERVAL '1 month - 1 day')::date,
+            CURRENT_DATE
+          ),
           INTERVAL '1 day'
         ) AS d(day)
         WHERE EXTRACT(ISODOW FROM d.day) <> 7
@@ -1366,7 +1371,7 @@ exports.getEmployeesSalaryDetailsByMonth = async (req, res) => {
       attendance_per_day AS (
         SELECT
           a.employee_id,
-          a.attendance_date,
+          a.attendance_date::date AS attendance_date,
           MAX(
             CASE
               WHEN LOWER(TRIM(a.status)) IN ('present', 'late') THEN 1
@@ -1379,8 +1384,8 @@ exports.getEmployeesSalaryDetailsByMonth = async (req, res) => {
           ) AS is_late_day
         FROM tbl_daily_attendance a
         INNER JOIN working_dates w
-          ON w.work_date = a.attendance_date
-        GROUP BY a.employee_id, a.attendance_date
+          ON w.work_date = a.attendance_date::date
+        GROUP BY a.employee_id, a.attendance_date::date
       ),
       attendance_summary AS (
         SELECT
@@ -1390,41 +1395,92 @@ exports.getEmployeesSalaryDetailsByMonth = async (req, res) => {
         FROM attendance_per_day
         GROUP BY employee_id
       ),
-      leave_per_day AS (
-        SELECT
-          l.employee_id,
-          w.work_date,
-          MAX(
-            CASE
-              WHEN l.from_date = l.to_date
-                AND l.duration ~ '^[0-9]+([.][0-9]+)?$'
-              THEN LEAST(l.duration::numeric, 1)
-              ELSE 1
-            END
-          ) AS day_value
-        FROM tbl_leaves l
-        INNER JOIN working_dates w
-          ON w.work_date BETWEEN l.from_date AND l.to_date
-        WHERE LOWER(TRIM(l.status)) = 'approved'
-        GROUP BY l.employee_id, w.work_date
-      ),
       leave_summary AS (
         SELECT
-          lpd.employee_id,
+          l.employee_id,
           SUM(
-            GREATEST(
-              LEAST(
-                lpd.day_value,
-                1 - COALESCE(apd.day_value, 0)
-              ),
-              0
-            )
+            CASE
+              WHEN l.duration::text ~ '^[0-9]+([.][0-9]+)?$'
+              THEN
+                l.duration::numeric
+                * (
+                    LEAST(
+                      l.to_date::date,
+                      ($1::date + INTERVAL '1 month - 1 day')::date,
+                      CURRENT_DATE
+                    )
+                    - GREATEST(l.from_date::date, $1::date)
+                    + 1
+                  )::numeric
+                / NULLIF(
+                    l.to_date::date - l.from_date::date + 1,
+                    0
+                  )
+              ELSE 0
+            END
           ) AS leaves_taken
-        FROM leave_per_day lpd
-        LEFT JOIN attendance_per_day apd
-          ON apd.employee_id = lpd.employee_id
-          AND apd.attendance_date = lpd.work_date
-        GROUP BY lpd.employee_id
+        FROM tbl_leaves l
+        WHERE LOWER(TRIM(l.status)) = 'approved'
+          AND l.from_date::date <= LEAST(
+            ($1::date + INTERVAL '1 month - 1 day')::date,
+            CURRENT_DATE
+          )
+          AND l.to_date::date >= $1::date
+        GROUP BY l.employee_id
+      ),
+      financial_year_leaves AS (
+        SELECT
+          l.employee_id,
+          SUM(
+            CASE
+              WHEN l.duration::text ~ '^[0-9]+([.][0-9]+)?$'
+              THEN
+                l.duration::numeric
+                * (
+                    LEAST(
+                      l.to_date::date,
+                      LEAST(
+                        ($1::date + INTERVAL '1 month - 1 day')::date,
+                        CURRENT_DATE
+                      )
+                    )
+                    - GREATEST(
+                      l.from_date::date,
+                      make_date(
+                        EXTRACT(YEAR FROM $1::date)::int
+                        - CASE
+                            WHEN EXTRACT(MONTH FROM $1::date) < 4 THEN 1
+                            ELSE 0
+                          END,
+                        4,
+                        1
+                      )
+                    )
+                    + 1
+                  )::numeric
+                / NULLIF(
+                    l.to_date::date - l.from_date::date + 1,
+                    0
+                  )
+              ELSE 0
+            END
+          ) AS total_leaves_taken
+        FROM tbl_leaves l
+        WHERE LOWER(TRIM(l.status)) = 'approved'
+          AND l.from_date::date <= LEAST(
+            ($1::date + INTERVAL '1 month - 1 day')::date,
+            CURRENT_DATE
+          )
+          AND l.to_date::date >= make_date(
+            EXTRACT(YEAR FROM $1::date)::int
+            - CASE
+                WHEN EXTRACT(MONTH FROM $1::date) < 4 THEN 1
+                ELSE 0
+              END,
+            4,
+            1
+          )
+        GROUP BY l.employee_id
       ),
       employee_salary AS (
         SELECT DISTINCT ON (es.employee_id)
@@ -1457,15 +1513,34 @@ exports.getEmployeesSalaryDetailsByMonth = async (req, res) => {
         sp.payment_id,
         COALESCE(wd.working_days, 0)::int AS working_days,
         COALESCE(att.days_present, 0)::float AS present_days,
-        COALESCE(ls.leaves_taken, 0)::float AS leaves_taken,
         GREATEST(
-          12 - COALESCE(ls.leaves_taken, 0),
+          COALESCE(wd.working_days, 0)
+          - COALESCE(att.days_present, 0),
           0
-        )::float AS balance_left,
+        )::float AS absent_days,
+        COALESCE(
+          sp.leaves_taken,
+          ls.leaves_taken,
+          0
+        )::float AS leaves_taken,
+        COALESCE(
+          fyl.total_leaves_taken,
+          0
+        )::float AS total_leaves_taken,
+        COALESCE(
+          sp.available_leaves,
+          GREATEST(
+            $2::numeric - COALESCE(fyl.total_leaves_taken, 0),
+            0
+          )
+        )::float AS available_leaves,
         GREATEST(
           COALESCE(wd.working_days, 0)
           - COALESCE(att.days_present, 0)
-          - COALESCE(ls.leaves_taken, 0),
+          - GREATEST(
+              $2::numeric - COALESCE(fyl.total_leaves_taken, 0),
+              0
+            ),
           0
         )::float AS lop_days,
         COALESCE(
@@ -1501,13 +1576,14 @@ exports.getEmployeesSalaryDetailsByMonth = async (req, res) => {
         ON att.employee_id = e.employee_id
       LEFT JOIN leave_summary ls
         ON ls.employee_id = e.employee_id
+      LEFT JOIN financial_year_leaves fyl
+        ON fyl.employee_id = e.employee_id
       LEFT JOIN tbl_department d
         ON d.department_id = e.department_id
       WHERE e.status = 'Active'
       ORDER BY e.employee_id`,
-      [salaryMonth]
+      [salaryMonth, leaveEntitlement]
     );
-
 
     const summary = result.rows.reduce(
       (acc, row) => {
@@ -1522,7 +1598,6 @@ exports.getEmployeesSalaryDetailsByMonth = async (req, res) => {
         acc.net_payroll += Number(row.net_amount || 0);
         acc.lop_deductions += Number(row.deduction || 0);
 
-
         return acc;
       },
       {
@@ -1535,14 +1610,16 @@ exports.getEmployeesSalaryDetailsByMonth = async (req, res) => {
     );
 
     return res.status(200).json({
+      success: true,
       statusCode: 200,
       message: "Employee salary details fetched successfully",
       month: selectedMonth,
       statistics: {
-        total_employees: Number(summary.total_employees),
-        net_payroll: Number(summary.net_payroll),
-        lop_deductions: Number(summary.lop_deductions),
-        pending_payments: Number(summary.pending_payments),
+        total_employees: summary.total_employees,
+        paid: summary.paid,
+        pending_payments: summary.pending_payments,
+        net_payroll: Number(summary.net_payroll.toFixed(2)),
+        lop_deductions: Number(summary.lop_deductions.toFixed(2)),
       },
       data: result.rows,
     });
@@ -1550,149 +1627,140 @@ exports.getEmployeesSalaryDetailsByMonth = async (req, res) => {
     console.error("Get Employee Salary Details By Month Error:", error);
 
     return res.status(500).json({
+      success: false,
       statusCode: 500,
       message: "Internal server error",
     });
   }
 };
 
+
 exports.creditEmployeeSalary = async (req, res) => {
   const { employee_id } = req.params;
-  const { month } = req.body; // format: YYYY-MM, e.g. 2026-10
+  const {
+    salary_month,
+    working_days,
+    days_present,
+    gross_amount,
+    deductions = 0,
+    paid_on = new Date().toISOString().slice(0, 10),
+  } = req.body;
 
   try {
-    if (!/^[1-9]\d*$/.test(employee_id)) {
+    if (!/^[1-9]\d*$/.test(employee_id || "")) {
       return res.status(400).json({
+        success: false,
         statusCode: 400,
         message: "Valid employee ID is required",
       });
     }
 
     if (
-      typeof month !== "string" ||
-      !/^\d{4}-(0[1-9]|1[0-2])$/.test(month.trim())
+      !salary_month ||
+      !/^\d{4}-(0[1-9]|1[0-2])-01$/.test(salary_month)
     ) {
       return res.status(400).json({
+        success: false,
         statusCode: 400,
-        message: "Valid month is required in YYYY-MM format",
+        message: "Valid salary month in YYYY-MM-01 format is required",
       });
     }
 
-    const salaryMonth = `${month.trim()}-01`;
+    if (
+      working_days == null ||
+      days_present == null ||
+      gross_amount == null ||
+      !Number.isFinite(Number(working_days)) ||
+      !Number.isFinite(Number(days_present)) ||
+      !Number.isFinite(Number(gross_amount)) ||
+      !Number.isFinite(Number(deductions)) ||
+      Number(working_days) < 0 ||
+      Number(days_present) < 0 ||
+      Number(days_present) > Number(working_days) ||
+      Number(gross_amount) < 0 ||
+      Number(deductions) < 0 ||
+      Number(deductions) > Number(gross_amount)
+    ) {
+      return res.status(400).json({
+        success: false,
+        statusCode: 400,
+        message: "Valid salary and attendance details are required",
+      });
+    }
 
-    const employee = await pool.query(
+    const employeeId = Number(employee_id);
+    const workingDays = Number(working_days);
+    const daysPresent = Number(days_present);
+    const grossAmount = Number(Number(gross_amount).toFixed(2));
+    const deductionAmount = Number(Number(deductions).toFixed(2));
+    const netAmount = Number((grossAmount - deductionAmount).toFixed(2));
+
+    const employeeResult = await pool.query(
       `SELECT employee_id
        FROM tbl_employee
-       WHERE employee_id = $1
-         AND status = 'Active'`,
-      [Number(employee_id)]
+       WHERE employee_id = $1`,
+      [employeeId]
     );
 
-    if (employee.rowCount === 0) {
+    if (employeeResult.rowCount === 0) {
       return res.status(404).json({
+        success: false,
         statusCode: 404,
-        message: `Active employee with ID ${employee_id} not found`,
+        message: `Employee with ID ${employeeId} not found`,
       });
     }
 
     const result = await pool.query(
-      `WITH working_dates AS(
-                                SELECT d.day:: date AS work_date
-         FROM generate_series(
-                                  $1:: date,
-                                  ($1:: date + INTERVAL '1 month - 1 day'):: date,
-                                INTERVAL '1 day'
-                              ) AS d(day)
-         WHERE EXTRACT(ISODOW FROM d.day) <> 7
-           AND NOT EXISTS(
-                                SELECT 1
-               FROM tbl_event ev
-               WHERE ev.event_date = d.day:: date
-                 AND LOWER(TRIM(ev.event_type)) = 'holiday'
-                              )
-       ),
-       month_working_days AS(
-                                SELECT COUNT(*):: numeric AS total_working_days
-         FROM working_dates
-                              ),
-  attendance_summary AS(
-    SELECT COALESCE(SUM(
-      CASE
-                    WHEN LOWER(TRIM(a.status)) = 'present' THEN 1
-                    WHEN LOWER(TRIM(a.status)) IN('half day', 'half-day', 'halfday') THEN 0.5
-                    ELSE 0
-                  END
-    ), 0) AS present_days
-         FROM tbl_daily_attendance a
-         JOIN working_dates w ON w.work_date = a.attendance_date
-         WHERE a.employee_id = $2
-  ),
-    calc AS(
-      SELECT e.employee_id,
-      wd.total_working_days AS working_days,
-      att.present_days AS days_present,
-      e.gross_salary AS gross_amount,
-      ROUND(
-        e.gross_salary / NULLIF(wd.total_working_days, 0)
-        * GREATEST(wd.total_working_days - att.present_days, 0),
-        2
-      ) AS deductions
-         FROM tbl_employee e
-         CROSS JOIN month_working_days wd
-         CROSS JOIN attendance_summary att
-         WHERE e.employee_id = $2
-    )
-       INSERT INTO tbl_salary_payment
-  (employee_id, salary_month, working_days, days_present,
-    gross_amount, deductions, net_amount, status, paid_on)
-       SELECT employee_id,
-  $1:: date,
-    working_days,
-    days_present,
-    gross_amount,
-    COALESCE(deductions, 0),
-    gross_amount - COALESCE(deductions, 0),
-    'PAID',
-    CURRENT_DATE
-       FROM calc
-       ON CONFLICT(employee_id, salary_month)
-       DO UPDATE SET status = 'PAID',
-  paid_on = CURRENT_DATE
-         WHERE tbl_salary_payment.status <> 'PAID'
-       RETURNING payment_id,
-  employee_id,
-  TO_CHAR(salary_month, 'YYYY-MM-DD') AS salary_month,
-    working_days,
-    days_present,
-    gross_amount,
-    deductions,
-    net_amount,
-    status,
-    TO_CHAR(paid_on, 'YYYY-MM-DD') AS paid_on`,
-      [salaryMonth, Number(employee_id)]
+      `INSERT INTO tbl_salary_payment(
+        employee_id,
+        salary_month,
+        working_days,
+        days_present,
+        gross_amount,
+        deductions,
+        net_amount,
+        status,
+        paid_on
+      )
+      VALUES($1, $2:: date, $3, $4, $5, $6, $7, 'PAID', $8)
+      RETURNING * `,
+      [
+        employeeId,
+        salary_month,
+        workingDays,
+        daysPresent,
+        grossAmount,
+        deductionAmount,
+        netAmount,
+        paid_on,
+      ]
     );
 
-    if (result.rowCount === 0) {
-      return res.status(409).json({
-        statusCode: 409,
-        message: `Salary for ${month.trim()} is already paid for employee ID ${employee_id} `,
-      });
-    }
-
-    return res.status(200).json({
-      statusCode: 200,
+    return res.status(201).json({
+      success: true,
+      statusCode: 201,
       message: "Employee salary credited successfully",
       data: result.rows[0],
     });
   } catch (error) {
-    console.error("Credit Employee Salary Error:", error);
+    console.error("Error crediting employee salary:", error);
+
+    if (error.code === "23505") {
+      return res.status(409).json({
+        success: false,
+        statusCode: 409,
+        message: `Salary payment already exists for employee ID ${req.params.employee_id} for the selected month`,
+      });
+    }
 
     return res.status(500).json({
+      success: false,
       statusCode: 500,
       message: "Internal server error",
     });
   }
 };
+
 
 const yearlyLeaveEntitlement = (selectedMonth) => {
   const [year, month] = selectedMonth.split("-").map(Number);
