@@ -14,6 +14,7 @@ router.get('/getEmployees', employeeController.getEmployeeDashboardCounts);
 router.get("/list", employeeController.getEmployeeIdAndName);
 router.get("/salary-details", employeeController.getEmployeesSalaryDetailsByMonth);
 router.get("/:employee_id/salary-payments", employeeController.getEmployeeSalaryPayments);
+router.get("/salary-payments/:payment_id", employeeController.getEmployeeSalaryPaymentById);
 
 router.get("/salaries/details", employeeController.getEmployeeSalaryDetailsByMonth);
 router.get("/:employee_id", employeeController.getEmployeeById);

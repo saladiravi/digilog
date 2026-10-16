@@ -2128,18 +2128,105 @@ exports.getEmployeeSalaryPayments = async (req, res) => {
       [employeeId]
     );
 
+    const statistics = {
+      net_salary: result.rows.reduce(
+        (total, payment) => total + Number(payment.net_amount || 0),
+        0
+      ),
+      paid_leaves: result.rows.reduce(
+        (total, payment) => total + Number(payment.leaves_taken || 0),
+        0
+      ),
+      lop_days: result.rows.reduce(
+        (total, payment) => total + Number(payment.lop_days || 0),
+        0
+      ),
+      deductions: result.rows.reduce(
+        (total, payment) => total + Number(payment.deductions || 0),
+        0
+      ),
+    };
+
     return res.status(200).json({
       success: true,
       statusCode: 200,
       message: "Employee salary payment details fetched successfully",
       data: {
         employee: employeeResult.rows[0],
+        statistics,
         total_payments: result.rowCount,
         payments: result.rows,
       },
     });
   } catch (error) {
     console.error("Get Employee Salary Payments Error:", error);
+
+    return res.status(500).json({
+      success: false,
+      statusCode: 500,
+      message: "Internal server error",
+    });
+  }
+};
+
+
+
+exports.getEmployeeSalaryPaymentById = async (req, res) => {
+  const { payment_id } = req.params;
+
+  try {
+    if (!/^[1-9]\d*$/.test(payment_id || "")) {
+      return res.status(400).json({
+        success: false,
+        statusCode: 400,
+        message: "Valid payment ID is required",
+      });
+    }
+
+    const paymentId = Number(payment_id);
+
+    const result = await pool.query(
+      `SELECT
+         sp.payment_id,
+         sp.employee_id,
+         e.employee_name,
+         e.emp_code,
+         TO_CHAR(sp.salary_month, 'YYYY-MM') AS salary_month,
+         sp.working_days,
+         sp.days_present,
+         sp.leaves_taken,
+         sp.available_leaves,
+         sp.lop_days,
+         sp.annual_ctc,
+         sp.gross_amount,
+         sp.deductions,
+         sp.net_amount,
+         sp.status,
+         sp.hr_reason,
+         TO_CHAR(sp.paid_on, 'YYYY-MM-DD') AS paid_on
+       FROM tbl_salary_payment sp
+       JOIN tbl_employee e
+         ON e.employee_id = sp.employee_id
+       WHERE sp.payment_id = $1`,
+      [paymentId]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        statusCode: 404,
+        message: `Salary payment with ID ${paymentId} not found`,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      statusCode: 200,
+      message: "Employee salary payment details fetched successfully",
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Get Employee Salary Payment By ID Error:", error);
 
     return res.status(500).json({
       success: false,
