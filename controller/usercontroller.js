@@ -104,7 +104,7 @@ exports.loginAdmin = async (req, res) => {
       },
       process.env.JWT_SECRET, // ✅ reads from .env
       {
-        expiresIn: "1d",
+        expiresIn: "7d",
       },
     );
 
@@ -131,15 +131,22 @@ exports.loginAdmin = async (req, res) => {
 
 
 exports.employeeLogin = async (req, res) => {
-  const { email } = req.body || {};
+  const { email, password } = req.body || {};
 
   try {
-    if (!email) {
+    if (
+      typeof email !== "string" ||
+      !email.trim() ||
+      typeof password !== "string" ||
+      !password
+    ) {
       return res.status(400).json({
         statusCode: 400,
-        message: "Email is required"
+        message: "Email and password are required",
       });
     }
+
+    const cleanedEmail = email.trim().toLowerCase();
 
     const result = await pool.query(
       `SELECT
@@ -148,55 +155,78 @@ exports.employeeLogin = async (req, res) => {
         enrolled,
         role,
         email,
-        status
+        status,
+        password
        FROM tbl_employee
-       WHERE LOWER(email) = LOWER($1)`,
-      [email.trim()]
+       WHERE LOWER(email) = $1`,
+      [cleanedEmail]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({
-        statusCode: 404,
-        message: "Employee not found"
+      return res.status(401).json({
+        statusCode: 401,
+        message: "Invalid email or password",
       });
     }
 
     const employee = result.rows[0];
 
-    // Check employee status
-    if (employee.status.toLowerCase() !== "active") {
+    if (!employee.password || !employee.password.trim()) {
       return res.status(403).json({
         statusCode: 403,
-        message: "Employee account is inactive"
+        message: "Password not set. Please contact the admin to update your password.",
       });
     }
 
-    // Generate JWT
+    const isPasswordValid = await bcrypt.compare(
+      password,
+      employee.password
+    );
+
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        statusCode: 401,
+        message: "Invalid email or password",
+      });
+    }
+
+    if (employee.status?.toLowerCase() !== "active") {
+      return res.status(403).json({
+        statusCode: 403,
+        message: "Employee account is inactive",
+      });
+    }
+
+    if (!process.env.JWT_SECRET) {
+      throw new Error("JWT_SECRET is not configured");
+    }
+
     const token = jwt.sign(
       {
         employee_id: employee.employee_id,
         email: employee.email,
-        role: employee.role
+        role: employee.role,
       },
       process.env.JWT_SECRET,
       {
-        expiresIn: "1d"
+        expiresIn: "7d",
       }
     );
 
+    const { password: storedPassword, ...employeeDetails } = employee;
+
     return res.status(200).json({
       statusCode: 200,
-      message: "Login successfully",
+      message: "Login successful",
       token,
-      employee
+      employee: employeeDetails,
     });
-
   } catch (error) {
     console.error("Employee Login Error:", error);
 
     return res.status(500).json({
       statusCode: 500,
-      message: "Internal server error"
+      message: "Internal server error",
     });
   }
 };

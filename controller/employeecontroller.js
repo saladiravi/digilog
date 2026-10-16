@@ -1,4 +1,5 @@
 const pool = require("../config/db");
+const bcrypt = require("bcryptjs");
 const deviceService = require("../services/deviceService");
 
 
@@ -11,6 +12,8 @@ const resolveDevice = (body) => ({
 exports.addEmployeeWithDevice = async (req, res) => {
   const {
     employee_name,
+    password,
+    role,
     date_of_birth,
     department_id,
     designation,
@@ -36,6 +39,7 @@ exports.addEmployeeWithDevice = async (req, res) => {
 
   const requiredFields = {
     employee_name,
+    password,
     date_of_birth,
     department_id,
     email,
@@ -62,6 +66,19 @@ exports.addEmployeeWithDevice = async (req, res) => {
     }
   }
 
+  const employeeRole = role === undefined || role === null || role === ""
+    ? "Employee"
+    : typeof role === "string"
+      ? role.trim()
+      : "";
+
+  if (!employeeRole) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Valid role is required",
+    });
+  }
+
   const stringFields = {
     employee_name,
     email,
@@ -80,6 +97,13 @@ exports.addEmployeeWithDevice = async (req, res) => {
         message: `Valid ${field} is required`,
       });
     }
+  }
+
+  if (typeof password !== "string" || password.length < 8) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Password must be at least 8 characters long"
+    });
   }
 
   if (
@@ -192,6 +216,8 @@ exports.addEmployeeWithDevice = async (req, res) => {
     }
   }
 
+  const hashedPassword = await bcrypt.hash(password, 12);
+
   const grossSalary =
     Number(salaryFields.basic_salary) +
     Number(salaryFields.hra) +
@@ -288,9 +314,11 @@ exports.addEmployeeWithDevice = async (req, res) => {
         status,
         email,
         emp_code,
-        joining_date
+        joining_date,
+        password,
+        role
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       RETURNING *`,
       [
         cleaned.employee_name,
@@ -302,6 +330,8 @@ exports.addEmployeeWithDevice = async (req, res) => {
         cleaned.email,
         cleaned.emp_code,
         joining_date,
+        hashedPassword,
+        employeeRole,
       ]
     );
 
@@ -439,23 +469,13 @@ exports.editEmployeeWithDevice = async (req, res) => {
     department_id,
     designation,
     joining_date,
+    relieving_date,
     mobile_number,
     status,
     email,
     emp_code,
-    basic_salary,
-    hra,
-    other_allowances,
-    travel_allowance,
-    pf_deduction,
-    professional_tax,
-    other_deductions,
-    effective_date,
-    account_holder_name,
-    bank_name,
-    account_number,
-    ifsc_code,
-    branch_name,
+    password,
+    role,
   } = req.body;
 
   let client;
@@ -478,11 +498,6 @@ exports.editEmployeeWithDevice = async (req, res) => {
     status,
     email,
     emp_code,
-    basic_salary,
-    account_holder_name,
-    bank_name,
-    account_number,
-    ifsc_code,
   };
 
   for (const [field, value] of Object.entries(requiredFields)) {
@@ -504,10 +519,6 @@ exports.editEmployeeWithDevice = async (req, res) => {
     mobile_number,
     email,
     emp_code,
-    account_holder_name,
-    bank_name,
-    account_number,
-    ifsc_code,
   };
 
   for (const [field, value] of Object.entries(stringFields)) {
@@ -525,13 +536,23 @@ exports.editEmployeeWithDevice = async (req, res) => {
     mobile_number: mobile_number.trim(),
     email: email.trim().toLowerCase(),
     emp_code: emp_code.trim(),
-    account_holder_name: account_holder_name.trim(),
-    bank_name: bank_name.trim(),
-    account_number: account_number.trim(),
-    ifsc_code: ifsc_code.trim().toUpperCase(),
-    branch_name:
-      typeof branch_name === "string" ? branch_name.trim() || null : null,
   };
+
+  const employeeRole =
+    role === undefined ||
+      role === null ||
+      (typeof role === "string" && !role.trim())
+      ? "Employee"
+      : typeof role === "string"
+        ? role.trim()
+        : null;
+
+  if (!employeeRole) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Valid role is required",
+    });
+  }
 
   if (
     typeof department_id !== "number" &&
@@ -560,13 +581,6 @@ exports.editEmployeeWithDevice = async (req, res) => {
     });
   }
 
-  if (!/^[A-Za-z]{4}0[A-Za-z0-9]{6}$/.test(cleaned.ifsc_code)) {
-    return res.status(400).json({
-      statusCode: 400,
-      message: "Valid IFSC code is required",
-    });
-  }
-
   if (!["Active", "Inactive"].includes(status)) {
     return res.status(400).json({
       statusCode: 400,
@@ -580,13 +594,6 @@ exports.editEmployeeWithDevice = async (req, res) => {
     Number.isFinite(Date.parse(`${value}T00:00:00Z`)) &&
     new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 
-  if (!isValidDate(joining_date)) {
-    return res.status(400).json({
-      statusCode: 400,
-      message: "Valid joining date in YYYY-MM-DD format is required",
-    });
-  }
-
   if (!isValidDate(date_of_birth)) {
     return res.status(400).json({
       statusCode: 400,
@@ -594,67 +601,46 @@ exports.editEmployeeWithDevice = async (req, res) => {
     });
   }
 
-  if (
-    effective_date !== undefined &&
-    effective_date !== null &&
-    effective_date !== "" &&
-    !isValidDate(effective_date)
-  ) {
+  if (!isValidDate(joining_date)) {
     return res.status(400).json({
       statusCode: 400,
-      message: "Valid effective date in YYYY-MM-DD format is required",
+      message: "Valid joining date in YYYY-MM-DD format is required",
     });
   }
 
-  const salaryFields = {
-    basic_salary,
-    hra: hra ?? 0,
-    other_allowances: other_allowances ?? 0,
-    travel_allowance: travel_allowance ?? 0,
-    pf_deduction: pf_deduction ?? 0,
-    professional_tax: professional_tax ?? 0,
-    other_deductions: other_deductions ?? 0,
-  };
+  if (
+    relieving_date !== undefined &&
+    relieving_date !== null &&
+    relieving_date !== "" &&
+    !isValidDate(relieving_date)
+  ) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Valid relieving date in YYYY-MM-DD format is required",
+    });
+  }
 
-  for (const [field, value] of Object.entries(salaryFields)) {
-    if (
-      (typeof value !== "number" &&
-        !(typeof value === "string" && value.trim() !== "")) ||
-      !Number.isFinite(Number(value)) ||
-      Number(value) < 0
-    ) {
+  if (
+    relieving_date &&
+    relieving_date < joining_date
+  ) {
+    return res.status(400).json({
+      statusCode: 400,
+      message: "Relieving date cannot be before joining date",
+    });
+  }
+
+  let hashedPassword = null;
+
+  if (password !== undefined && password !== null && password !== "") {
+    if (typeof password !== "string" || password.length < 8) {
       return res.status(400).json({
         statusCode: 400,
-        message: `Valid non-negative ${field} is required`,
+        message: "Password must be at least 8 characters long",
       });
     }
-  }
 
-  const grossSalary =
-    Number(salaryFields.basic_salary) +
-    Number(salaryFields.hra) +
-    Number(salaryFields.other_allowances) +
-    Number(salaryFields.travel_allowance);
-
-  const totalDeductions =
-    Number(salaryFields.pf_deduction) +
-    Number(salaryFields.professional_tax) +
-    Number(salaryFields.other_deductions);
-
-  const netSalary = grossSalary - totalDeductions;
-  const annualCtc = grossSalary * 12;
-
-  if (
-    !Number.isFinite(grossSalary) ||
-    !Number.isFinite(totalDeductions) ||
-    !Number.isFinite(netSalary) ||
-    !Number.isFinite(annualCtc) ||
-    netSalary < 0
-  ) {
-    return res.status(400).json({
-      statusCode: 400,
-      message: "Invalid salary values or total deductions exceed gross salary",
-    });
+    hashedPassword = await bcrypt.hash(password, 12);
   }
 
   try {
@@ -664,7 +650,7 @@ exports.editEmployeeWithDevice = async (req, res) => {
     transactionStarted = true;
 
     const existing = await client.query(
-      `SELECT employee_id, device_user_id
+      `SELECT employee_id
        FROM tbl_employee
        WHERE employee_id = $1
        FOR UPDATE`,
@@ -728,180 +714,49 @@ exports.editEmployeeWithDevice = async (req, res) => {
     }
 
     const updatedEmployeeResult = await client.query(
-      ` UPDATE tbl_employee
-        SET employee_name = $1,
+      `UPDATE tbl_employee
+      SET employee_name = $1,
           date_of_birth = $2,
           department_id = $3,
           designation = $4,
           joining_date = $5,
-          mobile_number = $6,
-          status = $7,
-          email = $8,
-          emp_code = $9
-      WHERE employee_id = $10
-      RETURNING *`,
+          relieving_date = $6,
+          mobile_number = $7,
+          status = $8,
+          email = $9,
+          emp_code = $10,
+          role = $11,
+          password = COALESCE($12, password)
+      WHERE employee_id = $13
+      RETURNING employee_id, employee_name, date_of_birth,
+                department_id, designation, joining_date,
+                relieving_date, mobile_number, status, email,
+                emp_code, role`,
       [
         cleaned.employee_name,
         date_of_birth,
         Number(department_id),
         cleaned.designation,
         joining_date,
+        relieving_date || null,
         cleaned.mobile_number,
         status,
         cleaned.email,
         cleaned.emp_code,
+        employeeRole,
+        hashedPassword,
         Number(employee_id),
       ]
     );
 
-    const salaryResult = await client.query(
-      `SELECT salary_id
-       FROM tbl_employee_salary
-       WHERE employee_id = $1
-       ORDER BY effective_date DESC, salary_id DESC
-       LIMIT 1
-       FOR UPDATE`,
+    const deviceResult = await client.query(
+      `SELECT device_user_id
+      FROM tbl_employee
+      WHERE employee_id = $1`,
       [Number(employee_id)]
     );
 
-    let savedSalary;
-
-    if (salaryResult.rowCount > 0) {
-      const salaryUpdateResult = await client.query(
-        `UPDATE tbl_employee_salary
-         SET basic_salary = $1,
-             annual_ctc = $2,
-             hra = $3,
-             other_allowances = $4,
-             travel_allowance = $5,
-             pf_deduction = $6,
-             professional_tax = $7,
-             other_deductions = $8,
-             gross_salary = $9,
-             total_deductions = $10,
-             net_salary = $11,
-             effective_date = COALESCE($12::date, effective_date)
-         WHERE salary_id = $13
-         RETURNING *`,
-        [
-          Number(salaryFields.basic_salary),
-          annualCtc,
-          Number(salaryFields.hra),
-          Number(salaryFields.other_allowances),
-          Number(salaryFields.travel_allowance),
-          Number(salaryFields.pf_deduction),
-          Number(salaryFields.professional_tax),
-          Number(salaryFields.other_deductions),
-          grossSalary,
-          totalDeductions,
-          netSalary,
-          effective_date || null,
-          salaryResult.rows[0].salary_id,
-        ]
-      );
-
-      savedSalary = salaryUpdateResult.rows[0];
-    } else {
-      const salaryInsertResult = await client.query(
-        `INSERT INTO tbl_employee_salary (
-          employee_id,
-          basic_salary,
-          annual_ctc,
-          hra,
-          other_allowances,
-          travel_allowance,
-          pf_deduction,
-          professional_tax,
-          other_deductions,
-          gross_salary,
-          total_deductions,
-          net_salary,
-          effective_date
-        )
-        VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-          COALESCE($13::date, CURRENT_DATE)
-        )
-        RETURNING *`,
-        [
-          Number(employee_id),
-          Number(salaryFields.basic_salary),
-          annualCtc,
-          Number(salaryFields.hra),
-          Number(salaryFields.other_allowances),
-          Number(salaryFields.travel_allowance),
-          Number(salaryFields.pf_deduction),
-          Number(salaryFields.professional_tax),
-          Number(salaryFields.other_deductions),
-          grossSalary,
-          totalDeductions,
-          netSalary,
-          effective_date || null,
-        ]
-      );
-
-      savedSalary = salaryInsertResult.rows[0];
-    }
-
-    const bankResult = await client.query(
-      `SELECT employee_id
-       FROM tbl_employee_bank_details
-       WHERE employee_id = $1
-       FOR UPDATE`,
-      [Number(employee_id)]
-    );
-
-    let savedBankDetails;
-
-    if (bankResult.rowCount > 0) {
-      const bankUpdateResult = await client.query(
-        `UPDATE tbl_employee_bank_details
-         SET account_holder_name = $1,
-             bank_name = $2,
-             account_number = $3,
-             ifsc_code = $4,
-             branch_name = $5
-         WHERE employee_id = $6
-         RETURNING employee_id, account_holder_name, bank_name,
-                   account_number, ifsc_code, branch_name`,
-        [
-          cleaned.account_holder_name,
-          cleaned.bank_name,
-          cleaned.account_number,
-          cleaned.ifsc_code,
-          cleaned.branch_name,
-          Number(employee_id),
-        ]
-      );
-
-      savedBankDetails = bankUpdateResult.rows[0];
-    } else {
-      const bankInsertResult = await client.query(
-        `INSERT INTO tbl_employee_bank_details (
-          employee_id,
-          account_holder_name,
-          bank_name,
-          account_number,
-          ifsc_code,
-          branch_name
-        )
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING employee_id, account_holder_name, bank_name,
-                  account_number, ifsc_code, branch_name`,
-        [
-          Number(employee_id),
-          cleaned.account_holder_name,
-          cleaned.bank_name,
-          cleaned.account_number,
-          cleaned.ifsc_code,
-          cleaned.branch_name,
-        ]
-      );
-
-      savedBankDetails = bankInsertResult.rows[0];
-    }
-
-    const deviceUserId = existing.rows[0].device_user_id;
+    const deviceUserId = deviceResult.rows[0].device_user_id;
 
     if (deviceUserId) {
       if (!process.env.DEVICE_SERIAL) {
@@ -928,13 +783,9 @@ exports.editEmployeeWithDevice = async (req, res) => {
     return res.status(200).json({
       success: true,
       statusCode: 200,
-      message: deviceUserId
-        ? "Employee, salary and bank details updated. Device synchronization queued."
-        : "Employee, salary and bank details updated successfully. Device synchronization was not queued because the employee is not synced to the device.",
+      message: "Employee details updated successfully",
       data: {
         employee: updatedEmployeeResult.rows[0],
-        salary: savedSalary,
-        bank_details: savedBankDetails,
       },
     });
   } catch (error) {
@@ -944,12 +795,12 @@ exports.editEmployeeWithDevice = async (req, res) => {
       });
     }
 
-    console.error("Edit Employee With Device Error:", error);
+    console.error("Edit Employee Error:", error);
 
     return res.status(500).json({
       success: false,
       statusCode: 500,
-      message: "Failed to update employee, salary and bank details",
+      message: "Failed to update employee details",
     });
   } finally {
     if (client) {
@@ -957,7 +808,6 @@ exports.editEmployeeWithDevice = async (req, res) => {
     }
   }
 };
-
 
 
 exports.updateEmployeeBankDetails = async (req, res) => {
@@ -1648,6 +1498,246 @@ exports.creditEmployeeSalary = async (req, res) => {
     });
   } catch (error) {
     console.error("Credit Employee Salary Error:", error);
+
+    return res.status(500).json({
+      statusCode: 500,
+      message: "Internal server error",
+    });
+  }
+};
+
+exports.getEmployeeSalaryDetails = async (req, res) => {
+  const { employee_id, month } = req.query;
+
+  try {
+    if (
+      typeof employee_id !== "string" ||
+      !/^[1-9]\d*$/.test(employee_id.trim())
+    ) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: "Valid employee ID is required",
+      });
+    }
+
+    if (
+      typeof month !== "string" ||
+      !/^\d{4}-(0[1-9]|1[0-2])$/.test(month.trim())
+    ) {
+      return res.status(400).json({
+        statusCode: 400,
+        message: "Valid month is required in YYYY-MM format",
+      });
+    }
+
+    const employeeId = Number(employee_id.trim());
+    const selectedMonth = month.trim();
+    const salaryMonth = `${selectedMonth}-01`;
+
+    const result = await pool.query(
+      `WITH working_dates AS (
+    SELECT d.day::date AS work_date
+    FROM generate_series(
+      $2::date,
+      ($2::date + INTERVAL '1 month - 1 day')::date,
+      INTERVAL '1 day'
+    ) AS d(day)
+    WHERE EXTRACT(ISODOW FROM d.day) <> 7
+      AND NOT EXISTS (
+        SELECT 1
+        FROM tbl_event ev
+        WHERE ev.event_date = d.day::date
+          AND LOWER(TRIM(ev.event_type)) = 'holiday'
+      )
+  ),
+  working_summary AS (
+    SELECT COUNT(*)::int AS working_days
+    FROM working_dates
+  ),
+  attendance_per_day AS (
+    SELECT
+      a.employee_id,
+      a.attendance_date,
+      MAX(
+        CASE
+          WHEN LOWER(TRIM(a.status)) IN ('present', 'late')
+          THEN 1
+          ELSE 0
+        END
+      ) AS present_value
+    FROM tbl_daily_attendance a
+    INNER JOIN working_dates wd
+      ON wd.work_date = a.attendance_date
+    WHERE a.employee_id = $1
+    GROUP BY a.employee_id, a.attendance_date
+  ),
+  attendance_summary AS (
+    SELECT
+      COALESCE(SUM(present_value), 0)::numeric AS present_days
+    FROM attendance_per_day
+  ),
+  leave_per_day AS (
+    SELECT
+      l.employee_id,
+      wd.work_date,
+      MAX(
+        CASE
+          WHEN l.from_date = l.to_date
+            AND l.duration ~ '^[0-9]+([.][0-9]+)?$'
+          THEN LEAST(l.duration::numeric, 1)
+          ELSE 1
+        END
+      ) AS leave_value
+    FROM tbl_leaves l
+    INNER JOIN working_dates wd
+      ON wd.work_date BETWEEN l.from_date AND l.to_date
+    WHERE l.employee_id = $1
+      AND LOWER(TRIM(l.status)) = 'approved'
+    GROUP BY l.employee_id, wd.work_date
+  ),
+  leave_summary AS (
+    SELECT
+      COALESCE(
+        SUM(
+          GREATEST(
+            LEAST(
+              lpd.leave_value,
+              1 - COALESCE(apd.present_value, 0)
+            ),
+            0
+          )
+        ),
+        0
+      )::numeric AS leaves_taken
+    FROM leave_per_day lpd
+    LEFT JOIN attendance_per_day apd
+      ON apd.employee_id = lpd.employee_id
+      AND apd.attendance_date = lpd.work_date
+  ),
+  yearly_leave_per_day AS (
+    SELECT
+      l.employee_id,
+      wd.work_date,
+      MAX(
+        CASE
+          WHEN l.from_date = l.to_date
+            AND l.duration ~ '^[0-9]+([.][0-9]+)?$'
+          THEN LEAST(l.duration::numeric, 1)
+          ELSE 1
+        END
+      ) AS leave_value
+    FROM tbl_leaves l
+    INNER JOIN generate_series(
+      make_date(
+        CASE
+          WHEN EXTRACT(MONTH FROM $2::date) >= 4
+          THEN EXTRACT(YEAR FROM $2::date)::int
+          ELSE EXTRACT(YEAR FROM $2::date)::int - 1
+        END,
+        4,
+        1
+      ),
+      ($2::date + INTERVAL '1 month - 1 day')::date,
+      INTERVAL '1 day'
+    ) AS wd(work_date)
+      ON wd.work_date BETWEEN l.from_date AND l.to_date
+    WHERE l.employee_id = $1
+      AND LOWER(TRIM(l.status)) = 'approved'
+      AND EXTRACT(ISODOW FROM wd.work_date) <> 7
+      AND NOT EXISTS (
+        SELECT 1
+        FROM tbl_event ev
+        WHERE ev.event_date = wd.work_date
+          AND LOWER(TRIM(ev.event_type)) = 'holiday'
+      )
+    GROUP BY l.employee_id, wd.work_date
+  ),
+  yearly_leave_summary AS (
+    SELECT
+      COALESCE(
+        SUM(
+          GREATEST(
+            LEAST(
+              ylp.leave_value,
+              1 - COALESCE(apd.present_value, 0)
+            ),
+            0
+          )
+        ),
+        0
+      )::numeric AS yearly_leaves_taken
+    FROM yearly_leave_per_day ylp
+    LEFT JOIN attendance_per_day apd
+      ON apd.employee_id = ylp.employee_id
+      AND apd.attendance_date = ylp.work_date
+  ),
+  employee_salary AS (
+    SELECT
+      es.employee_id,
+      es.annual_ctc,
+      es.gross_salary,
+      es.net_salary,
+      es.total_deductions
+    FROM tbl_employee_salary es
+    WHERE es.employee_id = $1
+      AND es.effective_date < (
+        $2::date + INTERVAL '1 month'
+      )
+    ORDER BY es.effective_date DESC, es.salary_id DESC
+    LIMIT 1
+  )
+  SELECT
+    e.employee_id,
+    e.employee_name,
+    e.emp_code,
+    TO_CHAR($2::date, 'YYYY-MM') AS month,
+    COALESCE(es.net_salary, 0)::numeric AS net_salary,
+    COALESCE(
+      NULLIF(es.annual_ctc, 0),
+      es.gross_salary * 12,
+      0
+    )::numeric AS annual_ctc,
+    COALESCE(ws.working_days, 0)::int AS working_days,
+    att.present_days::float AS present_days,
+    GREATEST(
+      ws.working_days - att.present_days,
+      0
+    )::float AS absent_days,
+    ls.leaves_taken::float AS leaves_taken,
+    GREATEST(
+      12 - yls.yearly_leaves_taken,
+      0
+    )::float AS paid_leave_available,
+    GREATEST(
+      ws.working_days - att.present_days - ls.leaves_taken,
+      0
+    )::float AS lop_days_before_hr
+  FROM tbl_employee e
+  CROSS JOIN working_summary ws
+  CROSS JOIN attendance_summary att
+  CROSS JOIN leave_summary ls
+  CROSS JOIN yearly_leave_summary yls
+  LEFT JOIN employee_salary es
+    ON es.employee_id = e.employee_id
+  WHERE e.employee_id = $1
+    AND e.status = 'Active'`,
+      [employeeId, salaryMonth]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        statusCode: 404,
+        message: `Active employee with ID ${employeeId} not found`,
+      });
+    }
+
+    return res.status(200).json({
+      statusCode: 200,
+      message: "Employee salary details fetched successfully",
+      data: result.rows[0],
+    });
+  } catch (error) {
+    console.error("Get Employee Salary Details Error:", error);
 
     return res.status(500).json({
       statusCode: 500,
