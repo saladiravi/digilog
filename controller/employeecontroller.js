@@ -1418,51 +1418,6 @@ exports.getEmployeeSalaryDetailsByMonth = async (req, res) => {
       [salaryMonth]
     );
 
-    const statisticsResult = await pool.query(
-      `SELECT
-        COUNT(*)::int AS total_employees,
-        COALESCE(
-          SUM(
-            CASE
-              WHEN UPPER(TRIM(COALESCE(sp.status, 'PENDING'))) = 'PAID'
-              THEN COALESCE(sp.net_amount, es.net_salary, 0)
-              ELSE 0
-            END
-          ),
-          0
-        )::numeric AS net_payroll,
-        COALESCE(
-          SUM(
-            CASE
-              WHEN UPPER(TRIM(COALESCE(sp.status, 'PENDING'))) = 'PAID'
-              THEN COALESCE(sp.deductions, es.total_deductions, 0)
-              ELSE 0
-            END
-          ),
-          0
-        )::numeric AS lop_deductions,
-        COUNT(*) FILTER (
-          WHERE UPPER(TRIM(COALESCE(sp.status, 'PENDING'))) = 'PENDING'
-        )::int AS pending_payments
-      FROM tbl_employee e
-      LEFT JOIN tbl_salary_payment sp
-        ON sp.employee_id = e.employee_id
-        AND sp.salary_month = $1::date
-      LEFT JOIN LATERAL (
-        SELECT
-          es.net_salary,
-          es.total_deductions
-        FROM tbl_employee_salary es
-        WHERE es.employee_id = e.employee_id
-          AND es.effective_date < (
-            $1::date + INTERVAL '1 month'
-          )
-        ORDER BY es.effective_date DESC, es.salary_id DESC
-        LIMIT 1
-      ) es ON TRUE
-      WHERE e.status = 'Active'`,
-      [salaryMonth]
-    );
 
     const summary = result.rows.reduce(
       (acc, row) => {
@@ -1471,34 +1426,33 @@ exports.getEmployeeSalaryDetailsByMonth = async (req, res) => {
         if (row.salary_status === "PAID") {
           acc.paid += 1;
         } else if (row.salary_status === "PENDING") {
-          acc.pending += 1;
-        } else if (row.salary_status === "HOLD") {
-          acc.hold += 1;
+          acc.pending_payments += 1;
         }
+
+        acc.net_payroll += Number(row.net_amount || 0);
+        acc.lop_deductions += Number(row.deduction || 0);
+
 
         return acc;
       },
       {
         total_employees: 0,
         paid: 0,
-        pending: 0,
-        hold: 0,
+        net_payroll: 0,
+        lop_deductions: 0,
+        pending_payments: 0,
       }
     );
-
-    const statistics = statisticsResult.rows[0];
 
     return res.status(200).json({
       statusCode: 200,
       message: "Employee salary details fetched successfully",
       month: selectedMonth,
-      working_days: result.rows[0]?.working_days ?? 0,
-      summary,
       statistics: {
-        total_employees: Number(statistics.total_employees),
-        net_payroll: Number(statistics.net_payroll),
-        lop_deductions: Number(statistics.lop_deductions),
-        pending_payments: Number(statistics.pending_payments),
+        total_employees: Number(summary.total_employees),
+        net_payroll: Number(summary.net_payroll),
+        lop_deductions: Number(summary.lop_deductions),
+        pending_payments: Number(summary.pending_payments),
       },
       data: result.rows,
     });
