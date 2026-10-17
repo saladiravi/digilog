@@ -2171,6 +2171,7 @@ exports.getEmployeeSalaryPayments = async (req, res) => {
 
 
 
+
 exports.getEmployeeSalaryPaymentById = async (req, res) => {
   const { payment_id } = req.params;
 
@@ -2191,6 +2192,9 @@ exports.getEmployeeSalaryPaymentById = async (req, res) => {
          sp.employee_id,
          e.employee_name,
          e.emp_code,
+         e.email,
+         e.mobile_number,
+
          TO_CHAR(sp.salary_month, 'YYYY-MM') AS salary_month,
          sp.working_days,
          sp.days_present,
@@ -2203,7 +2207,42 @@ exports.getEmployeeSalaryPaymentById = async (req, res) => {
          sp.net_amount,
          sp.status,
          sp.hr_reason,
-         TO_CHAR(sp.paid_on, 'YYYY-MM-DD') AS paid_on
+         TO_CHAR(sp.paid_on, 'YYYY-MM-DD') AS paid_on,
+
+         (
+           SELECT json_build_object(
+             'account_holder_name', b.account_holder_name,
+             'bank_name', b.bank_name,
+             'account_number', b.account_number,
+             'ifsc_code', b.ifsc_code,
+             'branch_name', b.branch_name
+           )
+           FROM tbl_employee_bank_details b
+           WHERE b.employee_id = e.employee_id
+           LIMIT 1
+         ) AS bank_details,
+
+         (
+           SELECT json_build_object(
+             'basic_salary', s.basic_salary,
+             'hra', s.hra,
+             'other_allowances', s.other_allowances,
+             'pf', s.pf_deduction,
+             'professional_tax', s.professional_tax,
+             'other_deductions', s.other_deductions,
+             'gross_salary', s.gross_salary,
+             'total_deductions', s.total_deductions,
+             'net_salary', s.net_salary,
+             'annual_ctc', s.annual_ctc,
+             'effective_date', TO_CHAR(s.effective_date, 'YYYY-MM-DD')
+           )
+           FROM tbl_employee_salary s
+           WHERE s.employee_id = e.employee_id
+             AND s.effective_date <= sp.salary_month
+           ORDER BY s.effective_date DESC
+           LIMIT 1
+         ) AS salary_details
+
        FROM tbl_salary_payment sp
        JOIN tbl_employee e
          ON e.employee_id = sp.employee_id
@@ -2235,3 +2274,4 @@ exports.getEmployeeSalaryPaymentById = async (req, res) => {
     });
   }
 };
+
