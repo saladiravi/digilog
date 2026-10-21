@@ -2191,6 +2191,9 @@ exports.getEmployeeSalaryPaymentById = async (req, res) => {
          sp.payment_id,
          sp.employee_id,
          e.employee_name,
+         d.department_name,
+         e.designation,
+         e.date_of_birth,
          e.emp_code,
          e.email,
          e.mobile_number,
@@ -2247,6 +2250,8 @@ exports.getEmployeeSalaryPaymentById = async (req, res) => {
        FROM tbl_salary_payment sp
        JOIN tbl_employee e
          ON e.employee_id = sp.employee_id
+       JOIN tbl_department d
+        ON e.department_id = d.department_id
        WHERE sp.payment_id = $1`,
       [paymentId]
     );
