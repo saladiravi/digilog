@@ -2228,6 +2228,7 @@ exports.getEmployeeSalaryPaymentById = async (req, res) => {
              'hra', s.hra,
              'other_allowances', s.other_allowances,
              'pf', s.pf_deduction,
+             'travel_allowance', s.travel_allowance,
              'professional_tax', s.professional_tax,
              'other_deductions', s.other_deductions,
              'gross_salary', s.gross_salary,
