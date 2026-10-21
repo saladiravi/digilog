@@ -1888,12 +1888,12 @@ exports.getEmployeeSalaryDetailsByMonth = async (req, res) => {
 
     if (
       employee.joining_date &&
-      new Date(employee.joining_date) >= new Date(`${month}-01T00:00:00`)
+      month < new Date(employee.joining_date).toISOString().slice(0, 7)
     ) {
       return res.status(400).json({
         success: false,
         statusCode: 400,
-        message: "Selected month must be after the employee's joining date",
+        message: "Selected month cannot be before the employee's joining month",
       });
     }
 
