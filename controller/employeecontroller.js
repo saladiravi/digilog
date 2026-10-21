@@ -2193,7 +2193,7 @@ exports.getEmployeeSalaryPaymentById = async (req, res) => {
          e.employee_name,
          d.department_name,
          e.designation,
-         e.date_of_birth,
+         e.joining_date  AS date_of_joining,
          e.emp_code,
          e.email,
          e.mobile_number,
