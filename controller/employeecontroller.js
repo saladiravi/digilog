@@ -2013,11 +2013,12 @@ exports.getEmployeeSalaryDetailsByMonth = async (req, res) => {
     );
 
     const salaryResult = await pool.query(
-      `SELECT gross_salary, annual_ctc
-      FROM tbl_employee_salary
-      WHERE employee_id = $1
-      ORDER BY effective_date DESC, salary_id DESC
-      LIMIT 1`,
+      `SELECT gross_salary, annual_ctc, pf_deduction, professional_tax,
+                other_deductions, total_deductions, net_salary
+        FROM tbl_employee_salary
+        WHERE employee_id = $1
+        ORDER BY effective_date DESC, salary_id DESC
+        LIMIT 1`,
       [employeeId]
     );
 
@@ -2027,6 +2028,26 @@ exports.getEmployeeSalaryDetailsByMonth = async (req, res) => {
 
     const annualCtc = salaryResult.rowCount
       ? Number(salaryResult.rows[0].annual_ctc)
+      : 0;
+
+    const pfDeduction = salaryResult.rowCount
+      ? Number(salaryResult.rows[0].pf_deduction)
+      : 0;
+
+    const professionalTax = salaryResult.rowCount
+      ? Number(salaryResult.rows[0].professional_tax)
+      : 0;
+
+    const otherDeductions = salaryResult.rowCount
+      ? Number(salaryResult.rows[0].other_deductions)
+      : 0;
+
+    const totalDeductions = salaryResult.rowCount
+      ? Number(salaryResult.rows[0].total_deductions)
+      : 0;
+
+    const netSalary = salaryResult.rowCount
+      ? Number(salaryResult.rows[0].net_salary)
       : 0;
 
     const totalLeavesTaken = Number(TotalLeavesResult.rows[0].leaves_taken);
@@ -2052,8 +2073,14 @@ exports.getEmployeeSalaryDetailsByMonth = async (req, res) => {
         employee_id: employee.employee_id,
         employee_name: employee.employee_name,
         month,
-        current_ctc: currentCtc,
+        monthly_ctc: currentCtc,
         annual_ctc: annualCtc,
+        gross_salary: currentCtc,
+        pf_deduction: pfDeduction,
+        professional_tax: professionalTax,
+        other_deductions: otherDeductions,
+        total_deductions: totalDeductions,
+        net_salary: netSalary,
         working_days: workingDays,
         present_days: presentDays,
         absent_days: absentDays,
